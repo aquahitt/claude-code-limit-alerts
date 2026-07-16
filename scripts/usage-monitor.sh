@@ -35,6 +35,11 @@ CACHE="$DIR/usage-monitor-cache.json"
 JQ="$(command -v jq || echo /opt/homebrew/bin/jq)"
 [ -x "$JQ" ] || exit 0
 
+log_fetch_fail() { # $1 reason — silent fetch failures used to leave no trace at all
+  [ "$MODE" = "status" ] && return 0
+  echo "$(date '+%F %T') [$MODE] fetch failed: $1" >> "$DIR/usage-monitor.log"
+}
+
 fetch_usage() {
   # cache keeps the Stop hook from hitting the API on every turn
   if [ -f "$CACHE" ]; then
@@ -59,6 +64,9 @@ fetch_usage() {
       echo "$resp"
       return 0
     fi
+    log_fetch_fail "live endpoint returned HTTP ${http_code:-?} (token likely expired/invalid — refreshes only while Claude Code is active)"
+  else
+    log_fetch_fail "no OAuth token in keychain"
   fi
   # Team/organization OAuth tokens get a 403 from the live endpoint (seen
   # with subscriptionType "team" — a client-fingerprint gate on Anthropic's
@@ -69,15 +77,27 @@ fetch_usage() {
   # push, so treat data older than 1h as stale and skip rather than alert
   # on outdated numbers.
   local claude_json="$HOME/.claude.json"
-  [ -f "$claude_json" ] || return 1
+  if [ ! -f "$claude_json" ]; then
+    log_fetch_fail "fallback unavailable: ~/.claude.json not found"
+    return 1
+  fi
   local util fetched_ms age
   util=$("$JQ" -c '.cachedUsageUtilization // empty' "$claude_json" 2>/dev/null)
-  [ -n "$util" ] && [ "$util" != "null" ] || return 1
+  if [ -z "$util" ] || [ "$util" = "null" ]; then
+    log_fetch_fail "fallback unavailable: no cachedUsageUtilization in ~/.claude.json"
+    return 1
+  fi
   fetched_ms=$(echo "$util" | "$JQ" -r '.fetchedAtMs // 0')
   age=$(( $(date +%s) - fetched_ms / 1000 ))
-  [ "$age" -lt 3600 ] || return 1
+  if [ "$age" -ge 3600 ]; then
+    log_fetch_fail "fallback stale: cachedUsageUtilization is ${age}s old (>=3600s), skipping"
+    return 1
+  fi
   resp=$(echo "$util" | "$JQ" -c '.utilization')
-  echo "$resp" | "$JQ" -e '.limits' >/dev/null 2>&1 || return 1
+  if ! echo "$resp" | "$JQ" -e '.limits' >/dev/null 2>&1; then
+    log_fetch_fail "fallback malformed: cachedUsageUtilization has no .limits"
+    return 1
+  fi
   echo "$resp" > "$CACHE"
   echo "$resp"
 }
