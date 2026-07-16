@@ -30,6 +30,16 @@ will be picked up automatically (with the raw `kind` as the label).
 design: a broken response means "no data this cycle", never a broken hook or
 statusline.
 
+**Team/organization accounts:** the live endpoint returns `403 forbidden` for
+OAuth tokens with `subscriptionType: "team"` even with correct headers — this
+looks like a fingerprint/gate on Anthropic's side, not something a header
+change can fix. When the live call fails, the monitor falls back to reading
+`~/.claude.json` → `.cachedUsageUtilization.utilization`, which Claude Code's
+own `/usage` command already populates locally (same `.limits[]` shape).
+Data is only as fresh as the last time `/usage` ran or the CLI refreshed it
+itself — there is no live push for these accounts — so fallback data older
+than 1 hour is treated as stale and skipped rather than used.
+
 ## Components / Компоненты
 
 ```

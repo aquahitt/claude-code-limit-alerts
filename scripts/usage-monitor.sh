@@ -46,12 +46,37 @@ fetch_usage() {
   fi
   local token
   token=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null \
-    | "$JQ" -r '.claudeAiOauth.accessToken // empty') || return 1
-  [ -n "$token" ] || return 1
-  local resp
-  resp=$(curl -sS --max-time 10 https://api.anthropic.com/api/oauth/usage \
-    -H "Authorization: Bearer $token" \
-    -H "anthropic-beta: oauth-2025-04-20" 2>/dev/null) || return 1
+    | "$JQ" -r '.claudeAiOauth.accessToken // empty')
+  local resp http_code
+  if [ -n "$token" ]; then
+    resp=$(curl -sS --max-time 10 -w '\n%{http_code}' https://api.anthropic.com/api/oauth/usage \
+      -H "Authorization: Bearer $token" \
+      -H "anthropic-beta: oauth-2025-04-20" 2>/dev/null)
+    http_code="${resp##*$'\n'}"
+    resp="${resp%$'\n'*}"
+    if [ "$http_code" = "200" ] && echo "$resp" | "$JQ" -e '.limits' >/dev/null 2>&1; then
+      echo "$resp" > "$CACHE"
+      echo "$resp"
+      return 0
+    fi
+  fi
+  # Team/organization OAuth tokens get a 403 from the live endpoint (seen
+  # with subscriptionType "team" — a client-fingerprint gate on Anthropic's
+  # side, not something fixable with headers/tokens from a plain script).
+  # Fall back to the same data Claude Code's own /usage command already
+  # cached locally. Same response shape (.limits[]), but only as fresh as
+  # the last time /usage was run or the CLI refreshed it itself — no live
+  # push, so treat data older than 1h as stale and skip rather than alert
+  # on outdated numbers.
+  local claude_json="$HOME/.claude.json"
+  [ -f "$claude_json" ] || return 1
+  local util fetched_ms age
+  util=$("$JQ" -c '.cachedUsageUtilization // empty' "$claude_json" 2>/dev/null)
+  [ -n "$util" ] && [ "$util" != "null" ] || return 1
+  fetched_ms=$(echo "$util" | "$JQ" -r '.fetchedAtMs // 0')
+  age=$(( $(date +%s) - fetched_ms / 1000 ))
+  [ "$age" -lt 3600 ] || return 1
+  resp=$(echo "$util" | "$JQ" -c '.utilization')
   echo "$resp" | "$JQ" -e '.limits' >/dev/null 2>&1 || return 1
   echo "$resp" > "$CACHE"
   echo "$resp"
