@@ -118,6 +118,8 @@ notif_title() {
 }
 
 notify_mac() { # $1 title, $2 body
+  # sound played directly — works even without Notification Center permission
+  afplay "/System/Library/Sounds/Glass.aiff" >/dev/null 2>&1 || true
   osascript -e "display notification \"$2\" with title \"$1\" sound name \"Glass\"" >/dev/null 2>&1 || true
 }
 
@@ -192,6 +194,7 @@ echo "$NEW_STATE" > "$STATE"
 
 if [ "${#MESSAGES[@]}" -gt 0 ]; then
   BODY=$(printf '%s\n' "${MESSAGES[@]}")
+  echo "$(date '+%F %T') [$MODE] ${BODY//$'\n'/ | }" >> "$DIR/usage-monitor.log"
   notify_mac "$(notif_title)" "$BODY"
   if [ "$MODE" = "hook" ]; then
     "$JQ" -n --arg msg "$BODY" '{systemMessage: $msg}'
