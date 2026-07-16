@@ -56,6 +56,12 @@ statusline.
 - **launchd agent** (`com.claude.usage-monitor`) — runs `usage-monitor.sh cron`
   every 5 minutes. This is what makes reset notifications work while Claude Code
   is closed, and what keeps the statusline cache fresh between turns.
+- **`notify-attention.sh`** — independent of the limit monitor. Hooked to
+  `Notification` (Claude waits for a permission/answer) and `Stop` (turn
+  finished). Reads the hook event JSON from stdin, resolves the session identity
+  (session name from `~/.claude/sessions/*.json`, project dir, git branch, last
+  user prompt from the transcript) and shows a macOS banner + plays a sound via
+  `afplay` (sound works even without Notification Center permission).
 
 ## State machine / Логика уведомлений
 
@@ -86,6 +92,7 @@ Multiple messages from one check are combined into a single notification.
 |---|---|
 | `~/.claude/scripts/usage-monitor.sh` | monitor (hook / cron / status) |
 | `~/.claude/scripts/statusline-with-limits.sh` | statusline wrapper |
+| `~/.claude/scripts/notify-attention.sh` | attention notifications (banner + sound) |
 | `~/.claude/scripts/statusline-base.cmd` | preserved previous statusline command (optional) |
 | `~/.claude/scripts/usage-monitor-cache.json` | cached API response |
 | `~/.claude/scripts/usage-monitor-state.json` | notification state |

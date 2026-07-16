@@ -2,8 +2,10 @@
 
 [Русский](README.md) | **English**
 
-Usage-limit monitoring for Claude Code: notifications when a limit approaches
-exhaustion, when a window resets, and live percentages in your statusline.
+Notifications for Claude Code: subscription usage-limit monitoring (approaching
+exhaustion, window resets, live percentages in your statusline) and "needs your
+attention" — a banner with sound when Claude waits for a permission, a reply,
+or finishes a task.
 
 > 🍎 **macOS only for now.** Windows and Linux support is planned — see [Roadmap](#roadmap).
 
@@ -22,6 +24,21 @@ exhaustion, when a window resets, and live percentages in your statusline.
 ```
 [your statusline] | 5h 71% · 7d 7% · Fable 4%
 ```
+
+**"Needs your attention" notifications** — when Claude waits for a permission
+or a reply, or finishes a task, you get a banner with sound. The title carries
+the session name (or project dir) and git branch, the subtitle carries your
+last prompt — so you instantly know which terminal to switch to:
+
+```
+Claude: stroi-homes (develop)          ← which session
+fix the notification bug…              ← what it works on
+Needs permission or a reply            ← what happened   (sound: Funk)
+Task finished                          ←                  (sound: Glass)
+```
+
+The sound is played directly via `afplay`, so it works even when banners are
+not allowed in Notification Center.
 
 **Manual check from the terminal:**
 
@@ -66,6 +83,7 @@ Installer flags:
 |---|---|
 | `--no-statusline` | leave the statusline untouched |
 | `--no-launchd` | skip the background agent (hooks only) |
+| `--no-attention` | skip "needs your attention" notifications |
 | `--lang en` | English notifications (default is Russian) |
 
 Restart Claude Code afterwards (or open `/hooks` once) so the new hooks are

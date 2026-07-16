@@ -3,8 +3,10 @@
 #
 # What it does:
 #   1. Copies scripts to ~/.claude/scripts/
-#   2. Adds Stop + SessionStart hooks to ~/.claude/settings.json
-#      (existing hooks are preserved; a backup of settings.json is made)
+#   2. Adds hooks to ~/.claude/settings.json
+#      (existing hooks are preserved; a backup of settings.json is made):
+#        - Stop + SessionStart -> usage-limit warnings in the Claude Code UI
+#        - Notification + Stop -> "needs your attention" banner + sound
 #   3. Optionally replaces the statusline with the limits-aware wrapper
 #      (your previous statusline command is preserved and keeps rendering)
 #   4. Installs and loads a launchd agent (checks limits every 5 minutes,
@@ -13,6 +15,7 @@
 # Flags:
 #   --no-statusline   skip statusline integration
 #   --no-launchd      skip the background launchd agent
+#   --no-attention    skip "needs your attention" notifications
 #   --lang en|ru      notification language (default: ru)
 
 set -euo pipefail
@@ -24,11 +27,13 @@ fi
 
 WITH_STATUSLINE=1
 WITH_LAUNCHD=1
+WITH_ATTENTION=1
 LANG_UM="ru"
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-statusline) WITH_STATUSLINE=0 ;;
     --no-launchd)    WITH_LAUNCHD=0 ;;
+    --no-attention)  WITH_ATTENTION=0 ;;
     --lang)          shift; LANG_UM="${1:-ru}" ;;
     *) echo "Unknown flag: $1" >&2; exit 1 ;;
   esac
@@ -50,11 +55,15 @@ mkdir -p "$SCRIPTS_DIR"
 cp "$REPO_DIR/scripts/usage-monitor.sh" "$SCRIPTS_DIR/"
 cp "$REPO_DIR/scripts/statusline-with-limits.sh" "$SCRIPTS_DIR/"
 chmod +x "$SCRIPTS_DIR/usage-monitor.sh" "$SCRIPTS_DIR/statusline-with-limits.sh"
+if [ "$WITH_ATTENTION" = "1" ]; then
+  cp "$REPO_DIR/scripts/notify-attention.sh" "$SCRIPTS_DIR/"
+  chmod +x "$SCRIPTS_DIR/notify-attention.sh"
+fi
 
-# persist language choice by prepending an env default (only if not ru)
+# persist language choice by changing the env default (only if not ru)
 if [ "$LANG_UM" != "ru" ]; then
-  for f in usage-monitor.sh statusline-with-limits.sh; do
-    sed -i '' "s/\${UM_LANG:-ru}/\${UM_LANG:-$LANG_UM}/" "$SCRIPTS_DIR/$f"
+  for f in usage-monitor.sh statusline-with-limits.sh notify-attention.sh; do
+    [ -f "$SCRIPTS_DIR/$f" ] && sed -i '' "s/\${UM_LANG:-ru}/\${UM_LANG:-$LANG_UM}/" "$SCRIPTS_DIR/$f"
   done
 fi
 
@@ -63,13 +72,10 @@ echo "==> Updating $SETTINGS"
 cp "$SETTINGS" "$SETTINGS.bak.limit-alerts"
 echo "    (backup: $SETTINGS.bak.limit-alerts)"
 
-HOOK_CMD='bash "$HOME/.claude/scripts/usage-monitor.sh" hook'
-HOOK_JSON=$("$JQ" -n --arg cmd "$HOOK_CMD" \
-  '{type: "command", command: $cmd, timeout: 20}')
-
-add_hook() { # $1 = event name
-  local updated
-  updated=$("$JQ" --arg cmd "$HOOK_CMD" --argjson h "$HOOK_JSON" --arg ev "$1" '
+add_hook() { # $1 = event name, $2 = hook json (with .command)
+  local cmd updated
+  cmd=$(echo "$2" | "$JQ" -r '.command')
+  updated=$("$JQ" --arg cmd "$cmd" --argjson h "$2" --arg ev "$1" '
     .hooks //= {} |
     .hooks[$ev] //= [{hooks: []}] |
     if ([.hooks[$ev][].hooks[]?.command] | index($cmd)) then .
@@ -77,9 +83,20 @@ add_hook() { # $1 = event name
   ' "$SETTINGS")
   echo "$updated" > "$SETTINGS"
 }
-add_hook "Stop"
-add_hook "SessionStart"
-echo "    Hooks added: Stop, SessionStart"
+
+MONITOR_HOOK=$("$JQ" -n '{type: "command",
+  command: "bash \"$HOME/.claude/scripts/usage-monitor.sh\" hook", timeout: 20}')
+add_hook "Stop" "$MONITOR_HOOK"
+add_hook "SessionStart" "$MONITOR_HOOK"
+echo "    Limit hooks added: Stop, SessionStart"
+
+if [ "$WITH_ATTENTION" = "1" ]; then
+  add_hook "Notification" "$("$JQ" -n '{type: "command",
+    command: "bash \"$HOME/.claude/scripts/notify-attention.sh\" notification", async: true}')"
+  add_hook "Stop" "$("$JQ" -n '{type: "command",
+    command: "bash \"$HOME/.claude/scripts/notify-attention.sh\" stop", async: true}')"
+  echo "    Attention hooks added: Notification, Stop"
+fi
 
 if [ "$WITH_STATUSLINE" = "1" ]; then
   # preserve the current statusline command so the wrapper keeps rendering it

@@ -17,8 +17,9 @@ if [ -n "$JQ" ] && [ -f "$SETTINGS" ]; then
   cp "$SETTINGS" "$SETTINGS.bak.limit-alerts-uninstall"
   updated=$("$JQ" '
     .hooks //= {} |
-    (.hooks.Stop, .hooks.SessionStart) |=
-      (if . then map(.hooks |= map(select(.command // "" | contains("usage-monitor.sh") | not)))
+    (.hooks.Stop, .hooks.SessionStart, .hooks.Notification) |=
+      (if . then map(.hooks |= map(select(.command // ""
+               | (contains("usage-monitor.sh") or contains("notify-attention.sh")) | not)))
              | map(select(.hooks | length > 0))
        else . end) |
     .hooks |= with_entries(select(.value != null and .value != []))
@@ -43,6 +44,7 @@ fi
 echo "==> Removing scripts and state"
 rm -f "$SCRIPTS_DIR/usage-monitor.sh" \
       "$SCRIPTS_DIR/statusline-with-limits.sh" \
+      "$SCRIPTS_DIR/notify-attention.sh" \
       "$SCRIPTS_DIR/statusline-base.cmd" \
       "$SCRIPTS_DIR/usage-monitor-state.json" \
       "$SCRIPTS_DIR/usage-monitor-cache.json"
