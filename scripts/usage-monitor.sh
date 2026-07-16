@@ -134,12 +134,20 @@ while IFS='|' read -r kind percent resets scope; do
   notified=$(echo "$NEW_STATE" | "$JQ" -r --arg k "$key" '.[$k].notified // 0')
   label=$(label_for "$kind" "$scope")
 
-  # window rolled over while usage was significant -> reset notification
-  if [ -n "$prev_resets" ] && [ "$prev_resets" != "$resets" ]; then
-    if [ "${prev_pct%%.*}" -ge "$RESET_MIN" ]; then
-      MESSAGES+=("$(msg_reset "$label" "${prev_pct%%.*}" "$pct")")
+  # window rollover: resets_at moved by more than 2 min. The API recomputes
+  # resets_at on every request with ±1s jitter, so a plain string comparison
+  # produces false "reset" alerts and re-arms threshold notifications.
+  if [ -n "$prev_resets" ]; then
+    e_prev=$(TZ=UTC date -jf "%Y-%m-%dT%H:%M:%S" "${prev_resets%%.*}" "+%s" 2>/dev/null || echo 0)
+    e_cur=$(TZ=UTC date -jf "%Y-%m-%dT%H:%M:%S" "${resets%%.*}" "+%s" 2>/dev/null || echo 0)
+    diff=$(( e_cur - e_prev )); [ "$diff" -lt 0 ] && diff=$(( -diff ))
+    if [ "$diff" -gt 120 ]; then
+      # the window really rolled over; announce only if usage actually dropped
+      if [ "${prev_pct%%.*}" -ge "$RESET_MIN" ] && [ "$pct" -lt "${prev_pct%%.*}" ]; then
+        MESSAGES+=("$(msg_reset "$label" "${prev_pct%%.*}" "$pct")")
+      fi
+      notified=0
     fi
-    notified=0
   fi
 
   # thresholds: one notification per threshold per window

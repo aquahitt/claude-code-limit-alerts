@@ -67,9 +67,12 @@ State is kept per limit kind in `~/.claude/scripts/usage-monitor-state.json`:
 
 On every check, for each limit:
 
-1. **Reset detection** — if the stored `resets_at` differs from the current one,
-   the window has rolled over. If the stored `percent` was ≥ `UM_RESET_MIN`
-   (default 50), a ♻️ notification is emitted. `notified` is cleared.
+1. **Reset detection** — the window is considered rolled over when `resets_at`
+   moved by **more than 2 minutes** (epoch comparison; the API recomputes
+   `resets_at` on every request with ±1s jitter, so exact comparison would
+   produce false resets). A ♻️ notification is emitted only if the stored
+   `percent` was ≥ `UM_RESET_MIN` (default 50) **and** the current percent is
+   lower than the stored one. `notified` is cleared.
 2. **Thresholds** — if `percent ≥ UM_CRIT` (95) and we haven't notified at that
    level in this window → 🔴. Else if `percent ≥ UM_WARN` (80) → 🟡.
    `notified` stores the highest announced threshold, so each fires at most
@@ -116,6 +119,9 @@ something to announce; Claude Code displays it in the UI. Silence otherwise.
 - **bash 3.2 (macOS default)** mis-parses `$var` immediately followed by a
   multibyte character (e.g. `«$label»` → "unbound variable"). Always use
   `${var}` in strings with non-ASCII text.
+- **`resets_at` jitters**: the API recomputes it on every request, so two
+  consecutive responses for the same window differ by up to ~1 second. Never
+  compare the timestamps for equality — use an epoch delta with tolerance.
 - `date -jf`/`date -r`/`stat -f` are BSD variants — one of the reasons the
   scripts are macOS-only for now.
 - Claude Code's settings watcher only reloads hook config for directories that
