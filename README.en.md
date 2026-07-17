@@ -120,6 +120,29 @@ the defaults at the top of `usage-monitor.sh`):
 The background check interval is `StartInterval` (seconds) in
 `~/Library/LaunchAgents/com.claude.usage-monitor.plist`.
 
+## Troubleshooting
+
+Every notification sent and every failed attempt to fetch data (an expired
+token, a 403 for team/org accounts, a stale local cache, etc.) is logged
+with a reason:
+
+```bash
+cat ~/.claude/scripts/usage-monitor.log       # full log
+grep "fetch failed" ~/.claude/scripts/usage-monitor.log | tail -30   # fetch failures only
+tail -f ~/.claude/scripts/usage-monitor.log   # watch live
+```
+
+Seeing a run of `fetch failed: ...` lines isn't necessarily a bug — the live
+endpoint may be unreachable (see FAQ below), and the local-cache fallback
+waits for a fresh (under an hour old) `cachedUsageUtilization` in
+`~/.claude.json` before it will use it.
+
+Check the launchd agent's state:
+
+```bash
+launchctl list | grep com.claude.usage-monitor
+```
+
 ## Uninstall
 
 ```bash
