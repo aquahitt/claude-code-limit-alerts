@@ -50,6 +50,24 @@ REPO_VERSION="$(cat "$REPO_DIR/VERSION")"
 INSTALLED_VERSION="unknown"
 [ -f "$VERSION_FILE" ] && INSTALLED_VERSION="$(cat "$VERSION_FILE")"
 
+if [ -f "$PLIST" ]; then
+  NEW_PLIST_TMP=$(mktemp)
+  generate_plist "$REPO_DIR/launchd/com.claude.usage-monitor.plist.template" "$NEW_PLIST_TMP" "$PROXY_ARG" "$PLIST"
+  if ! diff -q "$NEW_PLIST_TMP" "$PLIST" >/dev/null 2>&1; then
+    if [ "$DRY_RUN" = "1" ]; then
+      echo "    would reload launchd agent (plist changed)"
+    else
+      cp "$NEW_PLIST_TMP" "$PLIST"
+      chmod 600 "$PLIST"
+      launchctl bootout "gui/$(id -u)/com.claude.usage-monitor" 2>/dev/null || true
+      launchctl bootstrap "gui/$(id -u)" "$PLIST"
+      print_proxy_status "$PLIST" "$PROXY_ARG"
+      echo "    launchd agent reloaded"
+    fi
+  fi
+  rm -f "$NEW_PLIST_TMP"
+fi
+
 if [ "$INSTALLED_VERSION" = "$REPO_VERSION" ]; then
   echo "Уже установлена последняя версия (v$REPO_VERSION)"
   exit 0
@@ -69,24 +87,6 @@ for f in usage-monitor.sh statusline-with-limits.sh notify-attention.sh; do
     fi
   fi
 done
-
-if [ -f "$PLIST" ]; then
-  NEW_PLIST_TMP=$(mktemp)
-  generate_plist "$REPO_DIR/launchd/com.claude.usage-monitor.plist.template" "$NEW_PLIST_TMP" "$PROXY_ARG" "$PLIST"
-  if ! diff -q "$NEW_PLIST_TMP" "$PLIST" >/dev/null 2>&1; then
-    if [ "$DRY_RUN" = "1" ]; then
-      echo "    would reload launchd agent (plist changed)"
-    else
-      cp "$NEW_PLIST_TMP" "$PLIST"
-      chmod 600 "$PLIST"
-      launchctl bootout "gui/$(id -u)/com.claude.usage-monitor" 2>/dev/null || true
-      launchctl bootstrap "gui/$(id -u)" "$PLIST"
-      print_proxy_status "$PLIST" "$PROXY_ARG"
-      echo "    launchd agent reloaded"
-    fi
-  fi
-  rm -f "$NEW_PLIST_TMP"
-fi
 
 if [ "$DRY_RUN" = "1" ]; then
   echo "    would re-check hook registration in $SETTINGS"
