@@ -35,9 +35,24 @@ CACHE="$DIR/usage-monitor-cache.json"
 JQ="$(command -v jq || echo /opt/homebrew/bin/jq)"
 [ -x "$JQ" ] || exit 0
 
+LOG="$DIR/usage-monitor.log"
+LOG_MAX_BYTES=$((1024 * 1024)) # 1MB
+LOG_KEEP_LINES=2000
+
+# Caps unbounded growth from a long-running cron job — keeps only the most
+# recent lines once the log crosses LOG_MAX_BYTES, instead of never shrinking.
+rotate_log_if_needed() {
+  [ -f "$LOG" ] || return 0
+  local size
+  size=$(stat -f %z "$LOG" 2>/dev/null || echo 0)
+  [ "$size" -gt "$LOG_MAX_BYTES" ] || return 0
+  tail -n "$LOG_KEEP_LINES" "$LOG" > "$LOG.tmp" 2>/dev/null && mv "$LOG.tmp" "$LOG"
+}
+rotate_log_if_needed
+
 log_note() {
   [ "$MODE" = "status" ] && return 0
-  echo "$(date '+%F %T') [$MODE] $1" >> "$DIR/usage-monitor.log"
+  echo "$(date '+%F %T') [$MODE] $1" >> "$LOG"
 }
 log_fetch_fail() { log_note "fetch failed: $1"; } # silent fetch failures used to leave no trace at all
 
@@ -266,7 +281,7 @@ echo "$NEW_STATE" > "$STATE"
 
 if [ "${#MESSAGES[@]}" -gt 0 ]; then
   BODY=$(printf '%s\n' "${MESSAGES[@]}")
-  echo "$(date '+%F %T') [$MODE] ${BODY//$'\n'/ | }" >> "$DIR/usage-monitor.log"
+  echo "$(date '+%F %T') [$MODE] ${BODY//$'\n'/ | }" >> "$LOG"
   notify_mac "$(notif_title)" "$BODY"
   if [ "$MODE" = "hook" ]; then
     "$JQ" -n --arg msg "$BODY" '{systemMessage: $msg}'
