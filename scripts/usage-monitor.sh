@@ -190,6 +190,9 @@ LIMITS=$(echo "$USAGE" | "$JQ" -r \
   '.limits[] | [.kind, (.percent // 0), (.resets_at // ""), (.scope.model.display_name // "")] | join("|")')
 
 if [ "$MODE" = "status" ]; then
+  if [ -f "$DIR/.limit-alerts-version" ]; then
+    printf 'claude-code-limit-alerts v%s\n' "$(cat "$DIR/.limit-alerts-version")"
+  fi
   while IFS='|' read -r kind percent resets scope; do
     [ -n "$kind" ] || continue
     reset_local=$(to_local "$resets" "+%d.%m %H:%M")
