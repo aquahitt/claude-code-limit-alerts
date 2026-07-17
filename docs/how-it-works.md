@@ -40,6 +40,21 @@ Data is only as fresh as the last time `/usage` ran or the CLI refreshed it
 itself — there is no live push for these accounts — so fallback data older
 than 1 hour is treated as stale and skipped rather than used.
 
+**Corporate proxy/VPN:** if your shell profile (`~/.zshrc` or similar) sets
+`HTTP_PROXY`/`HTTPS_PROXY` to reach `api.anthropic.com`, the `launchd` agent
+won't see it on its own — launchd doesn't source shell profiles, so cron
+ticks start with a bare environment (the same class of issue the `PATH`
+fallback in `resolve_claude_bin()` already works around). Both `install.sh`
+and `update.sh` auto-detect `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY`
+(and their lowercase variants) from the shell they're run in and bake them
+into the agent's `EnvironmentVariables` (plist permissions restricted to
+`600`, since a proxy URL can embed credentials); pass `--proxy <url>` to set
+it explicitly regardless of the current shell, or `--proxy ""` to disable
+passthrough entirely. Re-run `update.sh` from a shell with the proxy active
+if the proxy config changes — it isn't otherwise tracked, though a
+previously-baked-in value is preserved across plain `update.sh` runs that
+don't happen to have it in their environment.
+
 ## Components / Компоненты
 
 ```

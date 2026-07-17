@@ -21,6 +21,10 @@ project lives in shell scripts installed into `~/.claude/`.
 - `lib/hooks.sh` — shared hook-registration logic (`add_hook`,
   `register_monitor_hooks`, `register_attention_hooks`), sourced by
   `install.sh` and `update.sh`; never itself copied into `~/.claude`.
+- `lib/launchd.sh` — shared launchd plist generation (`generate_plist`,
+  `print_proxy_status`), including proxy-env passthrough for corporate
+  proxy/VPN setups; sourced by `install.sh` and `update.sh` the same way as
+  `lib/hooks.sh`.
 - `scripts/usage-monitor.sh`, `scripts/notify-attention.sh`,
   `scripts/statusline-with-limits.sh` — the files actually copied into
   `~/.claude/scripts/` and run by hooks/launchd/statusline.
