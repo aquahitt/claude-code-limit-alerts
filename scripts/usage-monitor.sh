@@ -35,9 +35,33 @@ CACHE="$DIR/usage-monitor-cache.json"
 JQ="$(command -v jq || echo /opt/homebrew/bin/jq)"
 [ -x "$JQ" ] || exit 0
 
-log_fetch_fail() { # $1 reason — silent fetch failures used to leave no trace at all
+log_note() {
   [ "$MODE" = "status" ] && return 0
-  echo "$(date '+%F %T') [$MODE] fetch failed: $1" >> "$DIR/usage-monitor.log"
+  echo "$(date '+%F %T') [$MODE] $1" >> "$DIR/usage-monitor.log"
+}
+log_fetch_fail() { log_note "fetch failed: $1"; } # silent fetch failures used to leave no trace at all
+
+# Portable timeout: macOS ships neither `timeout` nor `gtimeout` by default,
+# but /usr/bin/perl is always present. alarm() fires in the perl process and
+# its default disposition (terminate) survives exec into the real command.
+run_with_timeout() { # $1 = seconds, rest = command + args
+  local secs="$1"; shift
+  perl -e 'alarm shift @ARGV; exec @ARGV' "$secs" "$@"
+}
+
+# Force-refreshes ~/.claude.json's cachedUsageUtilization by running the
+# /usage slash command headlessly. Slash commands are handled locally by the
+# CLI (0 tokens, no model call, ~0.5s) and -p skips the workspace-trust
+# prompt, so this is safe to run unattended — confirmed empirically: it
+# updates cachedUsageUtilization.fetchedAtMs to "now" and its .utilization
+# shape matches what the fallback below already parses. This also fires the
+# headless session's own Stop/SessionStart hooks, recursing once into
+# `usage-monitor.sh hook` — safe because hook mode never calls this itself,
+# so the recursion doesn't go any deeper. Only call this from cron/status:
+# calling it from hook mode would add ~0.5s to every real Claude Code turn.
+refresh_via_cli() {
+  command -v claude >/dev/null 2>&1 || return 1
+  ( cd "$HOME" && run_with_timeout 15 claude -p "/usage" --output-format json ) >/dev/null 2>&1
 }
 
 fetch_usage() {
@@ -70,12 +94,22 @@ fetch_usage() {
   fi
   # Team/organization OAuth tokens get a 403 from the live endpoint (seen
   # with subscriptionType "team" — a client-fingerprint gate on Anthropic's
-  # side, not something fixable with headers/tokens from a plain script).
+  # side, not something fixable with headers/tokens from a plain script). A
+  # personal token can also 401 here if it expired while Claude Code wasn't
+  # running to refresh it. Either way, try to force a fresh local read via
+  # the CLI itself before falling back to whatever's already cached — only
+  # from cron/status, never from hook (see refresh_via_cli comment).
+  if [ "$MODE" = "cron" ] || [ "$MODE" = "status" ]; then
+    if refresh_via_cli; then
+      log_note "refreshed local usage cache via 'claude -p /usage'"
+    else
+      log_note "'claude -p /usage' refresh unavailable or failed"
+    fi
+  fi
   # Fall back to the same data Claude Code's own /usage command already
   # cached locally. Same response shape (.limits[]), but only as fresh as
-  # the last time /usage was run or the CLI refreshed it itself — no live
-  # push, so treat data older than 1h as stale and skip rather than alert
-  # on outdated numbers.
+  # the last time /usage ran (just above, or previously) — treat data older
+  # than 1h as stale and skip rather than alert on outdated numbers.
   local claude_json="$HOME/.claude.json"
   if [ ! -f "$claude_json" ]; then
     log_fetch_fail "fallback unavailable: ~/.claude.json not found"
