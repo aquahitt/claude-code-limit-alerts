@@ -40,13 +40,10 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-JQ="$(command -v jq || true)"
-if [ -z "$JQ" ]; then
-  echo "jq is required. Install it with: brew install jq" >&2
-  exit 1
-fi
-
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$REPO_DIR/lib/hooks.sh"
+resolve_jq
+
 SCRIPTS_DIR="$HOME/.claude/scripts"
 SETTINGS="$HOME/.claude/settings.json"
 
@@ -60,6 +57,8 @@ if [ "$WITH_ATTENTION" = "1" ]; then
   chmod +x "$SCRIPTS_DIR/notify-attention.sh"
 fi
 
+cp "$REPO_DIR/VERSION" "$SCRIPTS_DIR/.limit-alerts-version"
+
 # persist language choice by changing the env default (only if not ru)
 if [ "$LANG_UM" != "ru" ]; then
   for f in usage-monitor.sh statusline-with-limits.sh notify-attention.sh; do
@@ -72,29 +71,11 @@ echo "==> Updating $SETTINGS"
 cp "$SETTINGS" "$SETTINGS.bak.limit-alerts"
 echo "    (backup: $SETTINGS.bak.limit-alerts)"
 
-add_hook() { # $1 = event name, $2 = hook json (with .command)
-  local cmd updated
-  cmd=$(echo "$2" | "$JQ" -r '.command')
-  updated=$("$JQ" --arg cmd "$cmd" --argjson h "$2" --arg ev "$1" '
-    .hooks //= {} |
-    .hooks[$ev] //= [{hooks: []}] |
-    if ([.hooks[$ev][].hooks[]?.command] | index($cmd)) then .
-    else .hooks[$ev][0].hooks += [$h] end
-  ' "$SETTINGS")
-  echo "$updated" > "$SETTINGS"
-}
-
-MONITOR_HOOK=$("$JQ" -n '{type: "command",
-  command: "bash \"$HOME/.claude/scripts/usage-monitor.sh\" hook", timeout: 20}')
-add_hook "Stop" "$MONITOR_HOOK"
-add_hook "SessionStart" "$MONITOR_HOOK"
+register_monitor_hooks
 echo "    Limit hooks added: Stop, SessionStart"
 
 if [ "$WITH_ATTENTION" = "1" ]; then
-  add_hook "Notification" "$("$JQ" -n '{type: "command",
-    command: "bash \"$HOME/.claude/scripts/notify-attention.sh\" notification", async: true}')"
-  add_hook "Stop" "$("$JQ" -n '{type: "command",
-    command: "bash \"$HOME/.claude/scripts/notify-attention.sh\" stop", async: true}')"
+  register_attention_hooks
   echo "    Attention hooks added: Notification, Stop"
 fi
 
