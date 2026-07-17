@@ -4,7 +4,10 @@
 # обновите репозиторий (git pull) перед запуском.
 #
 # Флаги:
-#   --dry-run   показать, что будет сделано, ничего не меняя
+#   --dry-run         показать, что будет сделано, ничего не меняя
+#   --proxy <url>|""  прокси для launchd-агента (по умолчанию — auto-detect
+#                     из HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY текущего
+#                     шелла, без учёта регистра); "" отключает passthrough
 
 set -euo pipefail
 
@@ -14,9 +17,12 @@ if [ "$(uname -s)" != "Darwin" ]; then
 fi
 
 DRY_RUN=0
+PROXY_URL=""
+PROXY_FLAG_SET=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
+    --proxy)   shift; PROXY_URL="${1:-}"; PROXY_FLAG_SET=1 ;;
     *) echo "Unknown flag: $1" >&2; exit 1 ;;
   esac
   shift
@@ -24,7 +30,11 @@ done
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$REPO_DIR/lib/hooks.sh"
+source "$REPO_DIR/lib/launchd.sh"
 resolve_jq
+
+PROXY_ARG="$PROXY_URL"
+[ "$PROXY_FLAG_SET" = "1" ] && [ -z "$PROXY_URL" ] && PROXY_ARG="__DISABLE__"
 
 SCRIPTS_DIR="$HOME/.claude/scripts"
 SETTINGS="$HOME/.claude/settings.json"
@@ -61,17 +71,21 @@ for f in usage-monitor.sh statusline-with-limits.sh notify-attention.sh; do
 done
 
 if [ -f "$PLIST" ]; then
-  NEW_PLIST_CONTENT=$(sed "s|__HOME__|$HOME|g" "$REPO_DIR/launchd/com.claude.usage-monitor.plist.template")
-  if ! diff -q <(echo "$NEW_PLIST_CONTENT") "$PLIST" >/dev/null 2>&1; then
+  NEW_PLIST_TMP=$(mktemp)
+  generate_plist "$REPO_DIR/launchd/com.claude.usage-monitor.plist.template" "$NEW_PLIST_TMP" "$PROXY_ARG" "$PLIST"
+  if ! diff -q "$NEW_PLIST_TMP" "$PLIST" >/dev/null 2>&1; then
     if [ "$DRY_RUN" = "1" ]; then
       echo "    would reload launchd agent (plist changed)"
     else
-      echo "$NEW_PLIST_CONTENT" > "$PLIST"
+      cp "$NEW_PLIST_TMP" "$PLIST"
+      chmod 600 "$PLIST"
       launchctl bootout "gui/$(id -u)/com.claude.usage-monitor" 2>/dev/null || true
       launchctl bootstrap "gui/$(id -u)" "$PLIST"
+      print_proxy_status "$PLIST" "$PROXY_ARG"
       echo "    launchd agent reloaded"
     fi
   fi
+  rm -f "$NEW_PLIST_TMP"
 fi
 
 if [ "$DRY_RUN" = "1" ]; then
