@@ -47,6 +47,7 @@ rm -f "$SCRIPTS_DIR/usage-monitor.sh" \
       "$SCRIPTS_DIR/notify-attention.sh" \
       "$SCRIPTS_DIR/statusline-base.cmd" \
       "$SCRIPTS_DIR/usage-monitor-state.json" \
-      "$SCRIPTS_DIR/usage-monitor-cache.json"
+      "$SCRIPTS_DIR/usage-monitor-cache.json" \
+      "$SCRIPTS_DIR/.limit-alerts-version"
 
 echo "Done. Restart Claude Code to apply."
