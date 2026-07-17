@@ -49,6 +49,20 @@ run_with_timeout() { # $1 = seconds, rest = command + args
   perl -e 'alarm shift @ARGV; exec @ARGV' "$secs" "$@"
 }
 
+# launchd runs the cron job with a bare PATH (/usr/bin:/bin:/usr/sbin:/sbin)
+# — no user profile, so `command -v claude` alone misses installs under
+# ~/.local/bin or Homebrew, which is exactly where it silently failed
+# ("refresh unavailable or failed" on every cron tick, confirmed via
+# usage-monitor.log). Same fallback pattern already used for jq above.
+resolve_claude_bin() {
+  command -v claude 2>/dev/null && return 0
+  local candidate
+  for candidate in "$HOME/.local/bin/claude" /opt/homebrew/bin/claude /usr/local/bin/claude; do
+    [ -x "$candidate" ] && { echo "$candidate"; return 0; }
+  done
+  return 1
+}
+
 # Force-refreshes ~/.claude.json's cachedUsageUtilization by running the
 # /usage slash command headlessly. Slash commands are handled locally by the
 # CLI (0 tokens, no model call, ~0.5s) and -p skips the workspace-trust
@@ -60,8 +74,9 @@ run_with_timeout() { # $1 = seconds, rest = command + args
 # so the recursion doesn't go any deeper. Only call this from cron/status:
 # calling it from hook mode would add ~0.5s to every real Claude Code turn.
 refresh_via_cli() {
-  command -v claude >/dev/null 2>&1 || return 1
-  ( cd "$HOME" && run_with_timeout 15 claude -p "/usage" --output-format json ) >/dev/null 2>&1
+  local claude_bin
+  claude_bin=$(resolve_claude_bin) || return 1
+  ( cd "$HOME" && run_with_timeout 15 "$claude_bin" -p "/usage" --output-format json ) >/dev/null 2>&1
 }
 
 fetch_usage() {
