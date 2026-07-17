@@ -1,2 +1,4 @@
 .idea/
 .worktrees/
+.claude/settings.local.json
+docs/superpowers/

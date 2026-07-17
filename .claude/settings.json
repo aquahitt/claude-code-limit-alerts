@@ -1,0 +1,48 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bash -n *)",
+      "Bash(shellcheck *)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "file=\"$CLAUDE_TOOL_INPUT_FILE_PATH\"; if [[ \"$file\" == *.sh ]]; then out=$(bash -n \"$file\" 2>&1); if [ $? -ne 0 ]; then echo \"BASH SYNTAX ERROR in $file:\"; echo \"$out\"; fi; fi"
+          },
+          {
+            "type": "command",
+            "command": "file=\"$CLAUDE_TOOL_INPUT_FILE_PATH\"; if [[ \"$file\" == *.sh ]] && command -v shellcheck >/dev/null 2>&1; then shellcheck -S warning \"$file\" 2>/dev/null | head -20; fi"
+          },
+          {
+            "type": "command",
+            "command": "file=\"$CLAUDE_TOOL_INPUT_FILE_PATH\"; if [[ \"$file\" == */README.md ]]; then echo 'README REMINDER: README.md and README.en.md must stay structurally in sync — check the sections in README.en.md (skill sync-readmes).'; elif [[ \"$file\" == */README.en.md ]]; then echo 'README REMINDER: README.en.md and README.md must stay structurally in sync — check the sections in README.md (skill sync-readmes).'; fi"
+          },
+          {
+            "type": "command",
+            "command": "file=\"$CLAUDE_TOOL_INPUT_FILE_PATH\"; if [[ \"$file\" == */scripts/*.sh || \"$file\" == */lib/*.sh || \"$file\" == */install.sh || \"$file\" == */uninstall.sh || \"$file\" == */update.sh || \"$file\" == */launchd/*.template ]]; then echo 'CHANGELOG REMINDER: behavior changed — add an entry to CHANGELOG.md (Keep a Changelog) and bump VERSION if warranted (skill release). Check whether docs/how-it-works.md is now stale.'; fi"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cmd=\"$CLAUDE_TOOL_INPUT_COMMAND\"; if echo \"$cmd\" | grep -qE 'git (commit|push)'; then echo 'PRE-COMMIT REMINDER: run skill check-scripts (bash -n + shellcheck on changed *.sh) and make sure README.md/README.en.md are in sync before committing.'; fi"
+          }
+        ]
+      }
+    ]
+  },
+  "plansDirectory": "docs/superpowers/plans"
+}
