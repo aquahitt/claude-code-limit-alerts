@@ -17,6 +17,10 @@
 #   --no-launchd      skip the background launchd agent
 #   --no-attention    skip "needs your attention" notifications
 #   --lang en|ru      notification language (default: ru)
+#   --proxy <url>|""  proxy for the launchd agent (default: auto-detected
+#                     from HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY, case-
+#                     insensitive, in the current shell); "" disables
+#                     passthrough entirely
 
 set -euo pipefail
 
@@ -29,12 +33,15 @@ WITH_STATUSLINE=1
 WITH_LAUNCHD=1
 WITH_ATTENTION=1
 LANG_UM="ru"
+PROXY_URL=""
+PROXY_FLAG_SET=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --no-statusline) WITH_STATUSLINE=0 ;;
     --no-launchd)    WITH_LAUNCHD=0 ;;
     --no-attention)  WITH_ATTENTION=0 ;;
     --lang)          shift; LANG_UM="${1:-ru}" ;;
+    --proxy)         shift; PROXY_URL="${1:-}"; PROXY_FLAG_SET=1 ;;
     *) echo "Unknown flag: $1" >&2; exit 1 ;;
   esac
   shift
@@ -42,7 +49,11 @@ done
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$REPO_DIR/lib/hooks.sh"
+source "$REPO_DIR/lib/launchd.sh"
 resolve_jq
+
+PROXY_ARG="$PROXY_URL"
+[ "$PROXY_FLAG_SET" = "1" ] && [ -z "$PROXY_URL" ] && PROXY_ARG="__DISABLE__"
 
 SCRIPTS_DIR="$HOME/.claude/scripts"
 SETTINGS="$HOME/.claude/settings.json"
@@ -99,7 +110,10 @@ if [ "$WITH_LAUNCHD" = "1" ]; then
   echo "==> Installing launchd agent"
   PLIST="$HOME/Library/LaunchAgents/com.claude.usage-monitor.plist"
   mkdir -p "$HOME/Library/LaunchAgents"
-  sed "s|__HOME__|$HOME|g" "$REPO_DIR/launchd/com.claude.usage-monitor.plist.template" > "$PLIST"
+  EXISTING_PLIST_ARG=""
+  [ -f "$PLIST" ] && EXISTING_PLIST_ARG="$PLIST"
+  generate_plist "$REPO_DIR/launchd/com.claude.usage-monitor.plist.template" "$PLIST" "$PROXY_ARG" "$EXISTING_PLIST_ARG"
+  print_proxy_status "$PLIST" "$PROXY_ARG"
   launchctl bootout "gui/$(id -u)/com.claude.usage-monitor" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$PLIST"
   echo "    Agent loaded (checks every 5 minutes)"
