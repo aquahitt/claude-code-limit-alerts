@@ -89,6 +89,21 @@ Installer flags:
 Restart Claude Code afterwards (or open `/hooks` once) so the new hooks are
 picked up. A backup of `~/.claude/settings.json` is created before any change.
 
+## Update
+
+```bash
+git pull
+./update.sh
+```
+
+Compares the installed version (`~/.claude/scripts/.limit-alerts-version`)
+against `VERSION` in the repo, re-copies changed scripts, reloads the
+launchd agent if its config changed, and re-checks hook registration —
+without installing anything you opted out of (`--no-statusline`/
+`--no-launchd`/`--no-attention` are still respected). `--dry-run` shows what
+would change without changing anything. See [CHANGELOG.md](CHANGELOG.md)
+for what changed between versions.
+
 ## Configuration
 
 Thresholds and behavior are controlled by environment variables (or by editing
