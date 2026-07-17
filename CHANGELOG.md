@@ -2,6 +2,11 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии — [SemVer](https://semver.org/lang/ru/).
 
+## [0.2.1] - 2026-07-17
+
+### Fixed
+- `claude -p "/usage"` в `refresh_via_cli()` теперь резолвится явными кандидатами (`~/.local/bin/claude`, Homebrew, `/usr/local/bin`), а не только через `PATH` — launchd запускает `cron`-джобу с голым `PATH` (`/usr/bin:/bin:/usr/sbin:/sbin`, без профиля пользователя), из-за чего фикс 0.2.0 для team/протухших токенов в реальном фоне не срабатывал (`command -v claude` ничего не находил).
+
 ## [0.2.0] - 2026-07-17
 
 ### Added
