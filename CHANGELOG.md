@@ -2,6 +2,11 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии — [SemVer](https://semver.org/lang/ru/).
 
+## [0.3.1] - 2026-07-23
+
+### Fixed
+- `refresh_via_cli()` в `usage-monitor.sh` теперь сверяет `cachedUsageUtilization.fetchedAtMs` до и после вызова `claude -p /usage`, а не доверяет одному коду возврата — при недоступности API (например, Team-подписка, заблокированная за неоплату) CLI мог завершаться успешно, но не обновлять кэш, из-за чего `usage-monitor.log` неделями писал ложное «refreshed local usage cache», маскируя реальную причину задержки в обнаружении сброса лимита.
+
 ## [0.3.0] - 2026-07-18
 
 ### Added
