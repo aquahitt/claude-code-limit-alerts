@@ -81,17 +81,39 @@ resolve_claude_bin() {
 # Force-refreshes ~/.claude.json's cachedUsageUtilization by running the
 # /usage slash command headlessly. Slash commands are handled locally by the
 # CLI (0 tokens, no model call, ~0.5s) and -p skips the workspace-trust
-# prompt, so this is safe to run unattended — confirmed empirically: it
-# updates cachedUsageUtilization.fetchedAtMs to "now" and its .utilization
-# shape matches what the fallback below already parses. This also fires the
-# headless session's own Stop/SessionStart hooks, recursing once into
-# `usage-monitor.sh hook` — safe because hook mode never calls this itself,
-# so the recursion doesn't go any deeper. Only call this from cron/status:
-# calling it from hook mode would add ~0.5s to every real Claude Code turn.
+# prompt, so this is safe to run unattended — its .utilization shape matches
+# what the fallback below already parses. It's supposed to update
+# cachedUsageUtilization.fetchedAtMs to "now", but during an outage (seen
+# with a Team subscription blocked for non-payment for a week) the CLI can
+# exit 0 without actually refreshing anything — it just serves its own stale
+# cache — so this compares fetchedAtMs before/after instead of trusting the
+# exit code, otherwise every cron tick logs a false "refreshed" while the
+# cache silently stays days old. This also fires the headless session's own
+# Stop/SessionStart hooks, recursing once into `usage-monitor.sh hook` —
+# safe because hook mode never calls this itself, so the recursion doesn't
+# go any deeper. Only call this from cron/status: calling it from hook mode
+# would add ~0.5s to every real Claude Code turn.
 refresh_via_cli() {
   local claude_bin
-  claude_bin=$(resolve_claude_bin) || return 1
-  ( cd "$HOME" && run_with_timeout 15 "$claude_bin" -p "/usage" --output-format json ) >/dev/null 2>&1
+  claude_bin=$(resolve_claude_bin) || { log_note "'claude -p /usage' refresh unavailable: claude binary not found"; return 1; }
+  local claude_json="$HOME/.claude.json"
+  local before after
+  before=$("$JQ" -r '.cachedUsageUtilization.fetchedAtMs // 0' "$claude_json" 2>/dev/null || echo 0)
+  if ! ( cd "$HOME" && run_with_timeout 15 "$claude_bin" -p "/usage" --output-format json ) >/dev/null 2>&1; then
+    log_note "'claude -p /usage' refresh failed to run (timeout or error)"
+    return 1
+  fi
+  after=$("$JQ" -r '.cachedUsageUtilization.fetchedAtMs // 0' "$claude_json" 2>/dev/null || echo 0)
+  if [ "$after" = "$before" ]; then
+    if [ "$after" = "0" ]; then
+      log_note "'claude -p /usage' ran but ~/.claude.json still has no cachedUsageUtilization"
+    else
+      local age=$(( $(date +%s) - after / 1000 ))
+      log_note "'claude -p /usage' ran but did not refresh cachedUsageUtilization (still ${age}s old)"
+    fi
+    return 1
+  fi
+  log_note "refreshed local usage cache via 'claude -p /usage'"
 }
 
 fetch_usage() {
@@ -130,11 +152,7 @@ fetch_usage() {
   # the CLI itself before falling back to whatever's already cached — only
   # from cron/status, never from hook (see refresh_via_cli comment).
   if [ "$MODE" = "cron" ] || [ "$MODE" = "status" ]; then
-    if refresh_via_cli; then
-      log_note "refreshed local usage cache via 'claude -p /usage'"
-    else
-      log_note "'claude -p /usage' refresh unavailable or failed"
-    fi
+    refresh_via_cli
   fi
   # Fall back to the same data Claude Code's own /usage command already
   # cached locally. Same response shape (.limits[]), but only as fresh as
