@@ -49,6 +49,15 @@ SL_ADVISOR="${UM_STATUSLINE_ADVISOR:-1}"
 SL_SUBAGENT="${UM_SUBAGENT_MODEL:-1}"
 SUBAGENT_TTL="${UM_SUBAGENT_TTL:-180}"
 SETTINGS="$HOME/.claude/settings.json"
+
+# Real ESC bytes, not the literal text "\033[...]". The final render uses
+# printf '%s', never '%b': everything on this line is attacker-adjacent data —
+# the base statusline command's output, the model display name, advisorModel
+# from a hand-editable settings.json — and %b would expand any backslash
+# sequence inside it. A stray "\n" would split the status line; "\c" would
+# silently truncate everything after it.
+DIM=$'\033[2m'
+RST=$'\033[0m'
 COMPACT_WARN="${UM_COMPACT_WARN:-70}"
 
 BASE=""
@@ -121,6 +130,41 @@ model_family() { # $1 = model id or alias -> lowercase family, or $1 unchanged
   printf '%s' "$1"
 }
 
+# Does this id carry a version, or is it a bare family alias? "claude-opus-5"
+# and "haiku-4-5" do; "fable" does not.
+model_has_version() { # $1 = model id or alias -> 0 if versioned
+  local m tok
+  m=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+  m="${m#claude-}"
+  case "$m" in
+    *-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) m="${m%-*}" ;;
+  esac
+  while : ; do
+    tok="${m%%-*}"
+    case "$tok" in
+      ''|*[!0-9]*) ;;
+      *) return 0 ;;
+    esac
+    [ "$m" = "${m#*-}" ] && return 1
+    m="${m#*-}"
+  done
+}
+
+# Whether two model identifiers denote the same model, given that they can
+# arrive in different shapes. Compare in full when both carry a version, so
+# Sonnet 4 and Sonnet 4.5 stay distinct; fall back to the family only when one
+# side is a bare alias and simply has no version to compare against — that is
+# the alias-vs-full-id case (settings.json stores "fable", a subagent's
+# meta.json stores "haiku"), where a full comparison would call identical
+# models different.
+models_same() { # $1, $2 = model ids or aliases -> 0 if the same model
+  if model_has_version "$1" && model_has_version "$2"; then
+    [ "$(prettify_model "$1")" = "$(prettify_model "$2")" ]
+  else
+    [ "$(model_family "$1")" = "$(model_family "$2")" ]
+  fi
+}
+
 # The model configured via /advisor, when it is a different family from the
 # session's. Read from settings.json, the same file the ctx denominator's
 # autoCompactWindow comes from. Advisor calls are separate requests with their
@@ -136,7 +180,7 @@ advisor_suffix() { # $1 = session model id
   adv=$("$JQ" -r 'if (.advisorModel | type) == "string" then .advisorModel else empty end' \
     "$SETTINGS" 2>/dev/null) || return 0
   case "$adv" in ''|*[![:print:]]*) return 0 ;; esac
-  [ "$(model_family "$adv")" = "$(model_family "$1")" ] && return 0
+  models_same "$adv" "$1" && return 0
   printf 'adv %s' "$(prettify_model "$adv")"
 }
 
@@ -155,11 +199,11 @@ advisor_suffix() { # $1 = session model id
 subagent_suffix() { # $1 transcript_path, $2 session_id, $3 session model id
   [ "$SL_SUBAGENT" = "1" ] || return 0
   [ -n "$1" ] && [ "$1" != "-" ] && [ -n "$2" ] && [ "$2" != "-" ] || return 0
-  local dir cutoff f mt mid pretty session_pretty models="" n=0
+  local dir cutoff f mt mid pretty session_model models="" n=0
   dir="$(dirname "$1")/$2/subagents"
   [ -d "$dir" ] || return 0
   cutoff=$(( $(date +%s) - SUBAGENT_TTL ))
-  session_pretty=$(model_family "$3")
+  session_model="$3"
   # shellcheck disable=SC2045  # agent-<hex>.jsonl names are whitespace-free by construction
   for f in $(ls -t "$dir"/agent-*.jsonl 2>/dev/null | head -n 12); do
     [ -f "$f" ] || continue
@@ -170,7 +214,7 @@ subagent_suffix() { # $1 transcript_path, $2 session_id, $3 session model id
     [ -n "$mid" ] || mid=$("$JQ" -r '.model // empty' "${f%.jsonl}.meta.json" 2>/dev/null)
     [ -n "$mid" ] || continue
     pretty=$(prettify_model "$mid")
-    [ "$(model_family "$mid")" = "$session_pretty" ] && continue
+    models_same "$mid" "$session_model" && continue
     models="${models}${pretty}
 "
     n=$(( n + 1 ))
@@ -195,12 +239,12 @@ if [ "$SL_MODEL" = "1" ] && [ -x "$JQ" ]; then
     MODEL_SEG="$M_NAME"
     [ "${M_EFF:--}" != "-" ] && MODEL_SEG="$MODEL_SEG/$M_EFF"
     ADV=$(advisor_suffix "${M_ID:--}")
-    [ -n "$ADV" ] && MODEL_SEG="$MODEL_SEG \033[2m·\033[0m $ADV"
+    [ -n "$ADV" ] && MODEL_SEG="$MODEL_SEG ${DIM}·${RST} $ADV"
     if [ "$SL_CTX" = "1" ] && [ "${M_CTX:--1}" -ge 0 ] 2>/dev/null; then
-      MODEL_SEG="$MODEL_SEG \033[2m·\033[0m ctx $(colorize_ctx "$M_CTX")"
+      MODEL_SEG="$MODEL_SEG ${DIM}·${RST} ctx $(colorize_ctx "$M_CTX")"
     fi
     SUB=$(subagent_suffix "${M_TP:--}" "${M_SID:--}" "${M_ID:--}")
-    [ -n "$SUB" ] && MODEL_SEG="$MODEL_SEG \033[2m·\033[0m $SUB"
+    [ -n "$SUB" ] && MODEL_SEG="$MODEL_SEG ${DIM}·${RST} $SUB"
   fi
 fi
 
@@ -211,18 +255,18 @@ if [ -f "$CACHE" ] && [ -x "$JQ" ]; then
       ([.limits[]? | select(.kind == "weekly_scoped")][0].percent // -1)] | map(floor) | join(" ")' \
     "$CACHE" 2>/dev/null)"
   if [ -n "$s" ]; then
-    LIMITS="${L5} $(colorize "$s") \033[2m·\033[0m ${L7} $(colorize "$w")"
+    LIMITS="${L5} $(colorize "$s") ${DIM}·${RST} ${L7} $(colorize "$w")"
     # model-scoped weekly limit (-1 = not present in cache, hidden). The WK
     # prefix keeps this from reading as "the model currently running".
     if [ "$f" -ge 0 ] 2>/dev/null; then
       MODEL=$("$JQ" -r '[.limits[]? | select(.kind == "weekly_scoped")][0].scope.model.display_name // ""' "$CACHE" 2>/dev/null)
-      [ -n "$MODEL" ] && LIMITS="$LIMITS \033[2m·\033[0m ${WK} ${MODEL} $(colorize "$f")"
+      [ -n "$MODEL" ] && LIMITS="$LIMITS ${DIM}·${RST} ${WK} ${MODEL} $(colorize "$f")"
     fi
   fi
 fi
 
 # Segments joined with " | ", each one skipped when empty.
-SEP=" \033[2m|\033[0m "
+SEP=" ${DIM}|${RST} "
 OUT="$BASE"
 for seg in "$MODEL_SEG" "$LIMITS"; do
   [ -n "$seg" ] || continue
@@ -230,4 +274,4 @@ for seg in "$MODEL_SEG" "$LIMITS"; do
   OUT="${OUT}${seg}"
 done
 
-printf '%b' "$OUT"
+printf '%s' "$OUT"
