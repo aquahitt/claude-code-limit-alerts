@@ -26,8 +26,10 @@ project lives in shell scripts installed into `~/.claude/`.
   proxy/VPN setups; sourced by `install.sh` and `update.sh` the same way as
   `lib/hooks.sh`.
 - `scripts/usage-monitor.sh`, `scripts/notify-attention.sh`,
-  `scripts/statusline-with-limits.sh` — the files actually copied into
-  `~/.claude/scripts/` and run by hooks/launchd/statusline.
+  `scripts/statusline-with-limits.sh`, `scripts/auto-resume.sh`,
+  `scripts/compact-advisor.sh` — the files actually copied into
+  `~/.claude/scripts/` and run by hooks/launchd/statusline. `auto-resume.sh`
+  is the only one a user runs by hand; `compact-advisor.sh` is a `Stop` hook.
 - `launchd/com.claude.usage-monitor.plist.template` — plist template
   (`__HOME__` substituted via `sed`).
 - `docs/how-it-works.md` — data source (`/api/oauth/usage` endpoint,
