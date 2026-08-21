@@ -59,22 +59,36 @@ fi
 # to a session the user has already left.
 record_session() {
   [ -n "$HOOK_INPUT" ] || return 0
-  local sid cwd tp prev_sid now state
+  local sid cwd tp prev_sid now state current existing
   sid=$(printf '%s' "$HOOK_INPUT" | "$JQ" -r '.session_id // empty' 2>/dev/null) || return 0
   [ -n "$sid" ] || return 0
   cwd=$(printf '%s' "$HOOK_INPUT" | "$JQ" -r '.cwd // empty' 2>/dev/null) || cwd=""
   tp=$(printf '%s' "$HOOK_INPUT" | "$JQ" -r '.transcript_path // empty' 2>/dev/null) || tp=""
   now=$(date +%s)
-  [ -f "$RESUME_STATE" ] || echo '{}' > "$RESUME_STATE"
-  prev_sid=$("$JQ" -r '.session_id // ""' "$RESUME_STATE" 2>/dev/null) || prev_sid=""
-  state=$("$JQ" --arg s "$sid" --arg c "$cwd" --arg t "$tp" --argjson n "$now" '
+  # A missing OR corrupt state file is treated the same way: recover to a
+  # clean object instead of leaving auto-resume permanently dead. Without
+  # this, one bad write (interrupted, or a race between two hook
+  # invocations sharing this single global path across Claude Code windows)
+  # would corrupt the file forever — every future jq read would fail and
+  # record_session would keep bailing out via `|| return 0`.
+  current='{}'
+  if [ -f "$RESUME_STATE" ]; then
+    existing=$(cat "$RESUME_STATE" 2>/dev/null) || existing=""
+    if [ -n "$existing" ] && printf '%s' "$existing" | "$JQ" -e . >/dev/null 2>&1; then
+      current="$existing"
+    fi
+  fi
+  prev_sid=$(printf '%s' "$current" | "$JQ" -r '.session_id // ""' 2>/dev/null) || prev_sid=""
+  state=$(printf '%s' "$current" | "$JQ" --arg s "$sid" --arg c "$cwd" --arg t "$tp" --argjson n "$now" '
       .session_id = $s | .cwd = $c | .transcript_path = $t | .seen_at = $n
       | .armed //= false | .resets_at //= "" | .notified_for //= ""
-    ' "$RESUME_STATE" 2>/dev/null) || return 0
+    ' 2>/dev/null) || return 0
   if [ -n "$prev_sid" ] && [ "$prev_sid" != "$sid" ]; then
     state=$(printf '%s' "$state" | "$JQ" '.armed = false | .resets_at = "" | .notified_for = ""' 2>/dev/null) || return 0
   fi
-  printf '%s\n' "$state" > "$RESUME_STATE"
+  # Atomic write, matching rotate_log_if_needed()'s tmp+mv pattern below —
+  # an interrupted write never leaves $RESUME_STATE half-written.
+  printf '%s\n' "$state" > "$RESUME_STATE.tmp" 2>/dev/null && mv "$RESUME_STATE.tmp" "$RESUME_STATE"
 }
 record_session || true
 
