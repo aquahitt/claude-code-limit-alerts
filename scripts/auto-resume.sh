@@ -41,21 +41,23 @@ else
   DEFAULT_PROMPT="Продолжай с того места, где остановился (работа была прервана лимитом). Сначала кратко скажи, на чём остановился."
 fi
 
+say() { # $1 = ru text, $2 = en text
+  if [ "$LANG_UM" = "en" ]; then echo "$2"; else echo "$1"; fi
+}
+
 SID=""
 PROMPT="${UM_RESUME_PROMPT:-$DEFAULT_PROMPT}"
 while [ $# -gt 0 ]; do
   case "$1" in
-    --prompt) shift; PROMPT="${1:-$PROMPT}" ;;
+    --prompt)
+      [ $# -ge 2 ] || { say "У флага --prompt нет значения." "--prompt requires a value." >&2; exit 1; }
+      shift; PROMPT="$1" ;;
     -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
     -*) echo "Unknown flag: $1" >&2; exit 1 ;;
     *) SID="$1" ;;
   esac
   shift
 done
-
-say() { # $1 = ru text, $2 = en text
-  if [ "$LANG_UM" = "en" ]; then echo "$2"; else echo "$1"; fi
-}
 
 # launchd-spawned parents have a bare PATH, and this worker may inherit it —
 # same fallback list as resolve_claude_bin() in usage-monitor.sh. Duplicated
