@@ -130,8 +130,12 @@ advisor_suffix() { # $1 = session model id
   [ "$SL_ADVISOR" = "1" ] || return 0
   [ -f "$SETTINGS" ] || return 0
   local adv
-  adv=$("$JQ" -r '.advisorModel // empty' "$SETTINGS" 2>/dev/null) || return 0
-  [ -n "$adv" ] || return 0
+  # Must be a string scalar: settings.json is hand-editable, and a non-string
+  # advisorModel would otherwise be rendered as raw multi-line JSON, breaking
+  # the status line into several lines.
+  adv=$("$JQ" -r 'if (.advisorModel | type) == "string" then .advisorModel else empty end' \
+    "$SETTINGS" 2>/dev/null) || return 0
+  case "$adv" in ''|*[![:print:]]*) return 0 ;; esac
   [ "$(model_family "$adv")" = "$(model_family "$1")" ] && return 0
   printf 'adv %s' "$(prettify_model "$adv")"
 }
