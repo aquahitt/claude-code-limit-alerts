@@ -305,16 +305,33 @@ open_resume_window() {
   fi
 }
 
+# Converts an ISO8601 UTC timestamp (as returned in resets_at) to epoch
+# seconds; empty output on a parse failure. Shared by the window-rollover
+# check below and arm_resume()'s once-per-window guard, both of which must
+# compare two resets_at values with tolerance rather than as exact strings —
+# the API recomputes resets_at on every request with ±1s jitter.
+to_epoch() { # $1 = ISO8601 UTC timestamp
+  TZ=UTC date -jf "%Y-%m-%dT%H:%M:%S" "${1%%.*}" "+%s" 2>/dev/null
+}
+
 # Marks the recorded session as "waiting for a reset" and tells the user how
 # to continue it. Fires at most once per limit window (guarded by
-# .notified_for, which stores the window's resets_at). Requires a recently
-# active session — an hours-old session id is not something the user still
-# wants resumed.
+# .notified_for, compared against resets_at with the same 120s jitter
+# tolerance the window-rollover check below uses — an exact string compare
+# would re-fire on every cron tick, since resets_at jitters by ~1s between
+# requests). Requires a recently active session — an hours-old session id is
+# not something the user still wants resumed.
 arm_resume() { # $1 = resets_at of the session limit
   local resets="$1" sid cwd seen_at now age notified worker lock pid
+  local e_notified e_resets w_diff
   worker="$DIR/auto-resume.sh"
   [ -f "$worker" ] || return 0
   [ -f "$RESUME_STATE" ] || return 0
+  # Explicit up-front parse check, mirroring record_session()'s self-heal
+  # validation: a corrupt/unreadable state file means there is nothing safe
+  # to arm, and bailing here (before any read or write) keeps this function
+  # from ever being the thing that turns a bad file into a worse one.
+  "$JQ" -e . "$RESUME_STATE" >/dev/null 2>&1 || return 0
   sid=$("$JQ" -r '.session_id // ""' "$RESUME_STATE" 2>/dev/null) || return 0
   [ -n "$sid" ] || return 0
   cwd=$("$JQ" -r '.cwd // ""' "$RESUME_STATE" 2>/dev/null) || cwd=""
@@ -324,12 +341,17 @@ arm_resume() { # $1 = resets_at of the session limit
   age=$(( now - seen_at ))
   [ "$age" -lt "$SESSION_TTL" ] || return 0
   notified=$("$JQ" -r '.notified_for // ""' "$RESUME_STATE" 2>/dev/null) || notified=""
-  [ "$notified" = "$resets" ] && return 0
+  if [ -n "$notified" ]; then
+    e_notified=$(to_epoch "$notified") || e_notified=0
+    e_resets=$(to_epoch "$resets") || e_resets=0
+    w_diff=$(( e_resets - e_notified )); [ "$w_diff" -lt 0 ] && w_diff=$(( -w_diff ))
+    [ "$w_diff" -le 120 ] && return 0
+  fi
 
   local state
   state=$("$JQ" --arg r "$resets" '.armed = true | .resets_at = $r | .notified_for = $r' \
     "$RESUME_STATE" 2>/dev/null) || return 0
-  printf '%s\n' "$state" > "$RESUME_STATE"
+  printf '%s\n' "$state" > "$RESUME_STATE.tmp" 2>/dev/null && mv "$RESUME_STATE.tmp" "$RESUME_STATE" || return 0
 
   local cmd="bash \"\$HOME/.claude/scripts/auto-resume.sh\""
   MESSAGES+=("$(msg_blocked "$(to_local "$resets" "+%H:%M")" "$cmd")")
@@ -395,8 +417,8 @@ while IFS='|' read -r kind percent resets scope; do
   # resets_at on every request with ±1s jitter, so a plain string comparison
   # produces false "reset" alerts and re-arms threshold notifications.
   if [ -n "$prev_resets" ]; then
-    e_prev=$(TZ=UTC date -jf "%Y-%m-%dT%H:%M:%S" "${prev_resets%%.*}" "+%s" 2>/dev/null || echo 0)
-    e_cur=$(TZ=UTC date -jf "%Y-%m-%dT%H:%M:%S" "${resets%%.*}" "+%s" 2>/dev/null || echo 0)
+    e_prev=$(to_epoch "$prev_resets" || echo 0)
+    e_cur=$(to_epoch "$resets" || echo 0)
     diff=$(( e_cur - e_prev )); [ "$diff" -lt 0 ] && diff=$(( -diff ))
     if [ "$diff" -gt 120 ]; then
       # the window really rolled over; announce only if usage actually dropped
