@@ -22,7 +22,9 @@ PROXY_FLAG_SET=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
-    --proxy)   shift; PROXY_URL="${1:-}"; PROXY_FLAG_SET=1 ;;
+    --proxy)
+      [ $# -ge 2 ] || { echo "--proxy requires a value" >&2; exit 1; }
+      shift; PROXY_URL="$1"; PROXY_FLAG_SET=1 ;;
     *) echo "Unknown flag: $1" >&2; exit 1 ;;
   esac
   shift

@@ -286,7 +286,16 @@ notif_title() {
 notify_mac() { # $1 title, $2 body
   # sound played directly — works even without Notification Center permission
   afplay "/System/Library/Sounds/Glass.aiff" >/dev/null 2>&1 || true
-  osascript -e "display notification \"$2\" with title \"$1\" sound name \"Glass\"" >/dev/null 2>&1 || true
+  # `on run argv` form (same as open_resume_window below and
+  # compact-advisor.sh): title/body are passed as argv items instead of being
+  # interpolated into the AppleScript source. A body containing a literal `"`
+  # (e.g. the auto-resume command in msg_blocked) would otherwise terminate
+  # the AppleScript string literal early, making osascript exit non-zero —
+  # swallowed by `|| true`, so the notification (and every other message
+  # batched into the same $2) silently never reached the screen.
+  osascript -e 'on run argv' \
+    -e 'display notification (item 2 of argv) with title (item 1 of argv) sound name "Glass"' \
+    -e 'end run' -- "$1" "$2" >/dev/null 2>&1 || true
 }
 
 # Opens a NEW terminal window (never touches an existing one) and starts the
@@ -326,6 +335,14 @@ arm_resume() { # $1 = resets_at of the session limit
   local e_notified e_resets w_diff
   worker="$DIR/auto-resume.sh"
   [ -f "$worker" ] || return 0
+  # A pre-0.4.0 install has no options file at all — keep the old
+  # file-presence-only gate for it. Once .limit-alerts-options exists (every
+  # install/re-install since), honour AUTO_RESUME explicitly rather than
+  # trusting $worker's presence alone — belt-and-braces alongside install.sh
+  # actually deleting $worker on --no-auto-resume.
+  if [ -f "$DIR/.limit-alerts-options" ]; then
+    grep -q '^AUTO_RESUME=1$' "$DIR/.limit-alerts-options" 2>/dev/null || return 0
+  fi
   [ -f "$RESUME_STATE" ] || return 0
   # Explicit up-front parse check, mirroring record_session()'s self-heal
   # validation: a corrupt/unreadable state file means there is nothing safe

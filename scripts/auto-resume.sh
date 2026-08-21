@@ -14,10 +14,13 @@
 # is confirmed it replaces itself (exec) with an interactive
 # `claude --resume <id> "<prompt>"` in the session's original directory, so
 # the session continues in this very terminal, with permission prompts
-# working normally.
+# working normally. `--prompt ""` (or `UM_RESUME_PROMPT=""`) means resume
+# with no first message at all — `claude --resume <id>` with no prompt
+# argument — instead of falling back to the default recap prompt.
 #
 # Environment overrides:
-#   UM_RESUME_PROMPT  first message sent to the resumed session
+#   UM_RESUME_PROMPT  first message sent to the resumed session (empty string
+#                     resumes with no first message, see above)
 #   UM_RESUME_MAX_WAIT  seconds to keep waiting after resets_at (default 28800)
 #   UM_LANG=ru|en
 
@@ -52,7 +55,7 @@ while [ $# -gt 0 ]; do
     --prompt)
       [ $# -ge 2 ] || { say "У флага --prompt нет значения." "--prompt requires a value." >&2; exit 1; }
       shift; PROMPT="$1" ;;
-    -h|--help) sed -n '2,20p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,25p' "$0"; exit 0 ;;
     -*) echo "Unknown flag: $1" >&2; exit 1 ;;
     *) SID="$1" ;;
   esac
@@ -150,10 +153,28 @@ fi
 # (weekly_all / weekly_scoped) is at 100%. UM_CACHE_TTL=0 forces a live
 # fetch: fetch_usage() otherwise serves usage-monitor-cache.json for up to
 # CACHE_TTL seconds in every mode except cron.
+#
+# Return codes distinguish "genuinely still limited" from "could not read
+# limits data at all" (missing/broken usage-monitor.sh, expired token, a 403
+# on a Team account, no fallback available) — the two must never share a
+# message, or the user is told a limit is busy when we simply have no data.
+# READY_REASON carries the diagnostic for the caller to report. An unreadable
+# condition keeps waiting rather than exiting immediately: it is frequently
+# transient (an expired token refreshes the next time Claude Code itself
+# runs), and this worker already has a MAX_WAIT ceiling.
+#   0 = ready, 1 = genuinely still limited, 2 = could not read limits data
+READY_REASON=""
 limits_ready() {
-  local out kind pct rest sess=100 blocked=0
-  out=$(UM_CACHE_TTL=0 bash "$MONITOR" limits 2>/dev/null) || return 1
-  [ -n "$out" ] || return 1
+  local out kind pct rest sess=100 blocked=0 status=0
+  out=$(UM_CACHE_TTL=0 bash "$MONITOR" limits 2>/dev/null) || status=$?
+  if [ "$status" -ne 0 ]; then
+    READY_REASON="usage-monitor.sh exited with status $status"
+    return 2
+  fi
+  if [ -z "$out" ]; then
+    READY_REASON="usage-monitor.sh returned no limits data"
+    return 2
+  fi
   while IFS='|' read -r kind pct rest; do
     [ -n "$kind" ] || continue
     pct=${pct%%.*}
@@ -164,19 +185,40 @@ limits_ready() {
       blocked=1
     fi
   done <<< "$out"
-  [ "$sess" -lt 95 ] && [ "$blocked" -eq 0 ]
+  if [ "$sess" -lt 95 ] && [ "$blocked" -eq 0 ]; then
+    return 0
+  fi
+  READY_REASON="limited"
+  return 1
 }
 
 DEADLINE=$(( $(date +%s) + MAX_WAIT ))
-while ! limits_ready; do
+while :; do
+  # `limits_ready || RC=$?` rather than `if limits_ready; then break; fi`:
+  # under set -e, an `if` with no else branch taken resets $? to 0 once
+  # control reaches `fi`, which would silently collapse every failure into
+  # "RC=0" and misreport a read failure as ready.
+  RC=0
+  limits_ready || RC=$?
+  [ "$RC" -eq 0 ] && break
   NOW=$(date +%s)
   if [ "$NOW" -ge "$DEADLINE" ]; then
-    say "Лимиты так и не освободились за отведённое время — выходим." \
-        "Limits did not free up within the allotted time — giving up." >&2
+    if [ "$RC" -eq 2 ]; then
+      say "Не удалось прочитать данные о лимитах (${READY_REASON}) за отведённое время — выходим." \
+          "Could not read limits data (${READY_REASON}) within the allotted time — giving up." >&2
+    else
+      say "Лимиты так и не освободились за отведённое время — выходим." \
+          "Limits did not free up within the allotted time — giving up." >&2
+    fi
     exit 1
   fi
-  say "Лимит ещё занят (возможно, недельный) — жду дальше…" \
-      "Still limited (weekly limit, most likely) — keep waiting…"
+  if [ "$RC" -eq 2 ]; then
+    say "Не удалось прочитать данные о лимитах (${READY_REASON}) — жду и попробую снова…" \
+        "Could not read limits data (${READY_REASON}) — waiting and retrying…"
+  else
+    say "Лимит ещё занят (возможно, недельный) — жду дальше…" \
+        "Still limited (weekly limit, most likely) — keep waiting…"
+  fi
   # Bound the poll interval by the remaining wait time, not a flat 300s:
   # otherwise a short MAX_WAIT (e.g. in tests, or near its own deadline)
   # overshoots the deadline by up to 5 minutes before the next check.
@@ -209,4 +251,11 @@ trap - EXIT INT TERM
 
 say "▶️ Лимит сброшен — продолжаю сессию $SID" "▶️ Limit reset — resuming session $SID"
 cd "$CWD"
-exec "$CLAUDE_BIN" --resume "$SID" "$PROMPT"
+# An explicit --prompt "" (or UM_RESUME_PROMPT="") means "resume with no
+# first message" — DEFAULT_PROMPT is always non-empty, so PROMPT can only be
+# empty here by explicit user request, never by silent fallback.
+if [ -n "$PROMPT" ]; then
+  exec "$CLAUDE_BIN" --resume "$SID" "$PROMPT"
+else
+  exec "$CLAUDE_BIN" --resume "$SID"
+fi

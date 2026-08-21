@@ -21,8 +21,12 @@
 # command into that file automatically.
 #
 # Colors: green < WARN, yellow >= WARN (80), red >= CRIT (95). The context
-# percentage uses UM_COMPACT_WARN (70) / 90 instead — the same threshold
-# compact-advisor.sh signals on, so the two never contradict each other.
+# percentage uses UM_COMPACT_WARN (70) / 90 instead, and renders Claude
+# Code's own .context_window.used_percentage. That's the same threshold
+# *value* compact-advisor.sh signals on, but not the same *quantity*: the
+# advisor computes last-assistant-turn tokens ÷ autoCompactWindow, a
+# different denominator. With a custom --auto-compact-window (e.g. 140000)
+# the advisor can fire while this segment still shows green.
 #
 # Environment overrides:
 #   UM_WARN, UM_CRIT, UM_LANG=ru|en

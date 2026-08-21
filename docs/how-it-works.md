@@ -220,7 +220,7 @@ Turn it off with `install.sh --no-statusline-model` (whole segment) or
 | `~/.claude/scripts/statusline-base.cmd` | preserved previous statusline command (optional) |
 | `~/.claude/scripts/usage-monitor-cache.json` | cached API response |
 | `~/.claude/scripts/usage-monitor-state.json` | notification state |
-| `~/.claude/scripts/auto-resume-state.json` | last active session + armed state |
+| `~/.claude/scripts/auto-resume-state.json` | last active session + resume plan (`resets_at`, `notified_for`); `armed` is written when the monitor arms but nothing currently reads it back |
 | `~/.claude/scripts/compact-advisor-state.json` | compact-signal anti-spam state |
 | `~/.claude/scripts/.limit-alerts-options` | options chosen at install time |
 | `~/Library/LaunchAgents/com.claude.usage-monitor.plist` | background agent |

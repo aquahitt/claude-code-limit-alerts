@@ -47,3 +47,21 @@ register_compact_advisor_hook() {
   add_hook "Stop" "$("$JQ" -n '{type: "command",
     command: "bash \"$HOME/.claude/scripts/compact-advisor.sh\"", timeout: 10}')"
 }
+
+# Удаляет из hooks (Stop/SessionStart/Notification) все записи, чья команда
+# содержит подстроку $1 (например "compact-advisor.sh") — форма фильтра как
+# в uninstall.sh. Нужна install.sh, чтобы повторная установка с --no-* флагом
+# действительно отключала хук, а не просто переставала переустанавливать
+# скрипт. Требует $JQ, $SETTINGS.
+remove_hook_matching() {
+  local pattern="$1" updated
+  updated=$("$JQ" --arg p "$pattern" '
+    .hooks //= {} |
+    (.hooks.Stop, .hooks.SessionStart, .hooks.Notification) |=
+      (if . then map(.hooks |= map(select(.command // "" | contains($p) | not)))
+             | map(select(.hooks | length > 0))
+       else . end) |
+    .hooks |= with_entries(select(.value != null and .value != []))
+  ' "$SETTINGS")
+  echo "$updated" > "$SETTINGS"
+}

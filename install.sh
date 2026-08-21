@@ -68,9 +68,15 @@ while [ $# -gt 0 ]; do
     --no-compact-advisor) WITH_COMPACT_ADVISOR=0 ;;
     --no-statusline-model) WITH_STATUSLINE_MODEL=0 ;;
     --no-subagent-model) WITH_SUBAGENT_MODEL=0 ;;
-    --auto-compact-window) shift; AUTO_COMPACT_WINDOW="${1:-}" ;;
-    --lang)          shift; LANG_UM="${1:-ru}" ;;
-    --proxy)         shift; PROXY_URL="${1:-}"; PROXY_FLAG_SET=1 ;;
+    --auto-compact-window)
+      [ $# -ge 2 ] || { echo "--auto-compact-window requires a value" >&2; exit 1; }
+      shift; AUTO_COMPACT_WINDOW="$1" ;;
+    --lang)
+      [ $# -ge 2 ] || { echo "--lang requires a value" >&2; exit 1; }
+      shift; LANG_UM="$1" ;;
+    --proxy)
+      [ $# -ge 2 ] || { echo "--proxy requires a value" >&2; exit 1; }
+      shift; PROXY_URL="$1"; PROXY_FLAG_SET=1 ;;
     *) echo "Unknown flag: $1" >&2; exit 1 ;;
   esac
   shift
@@ -116,10 +122,20 @@ fi
 if [ "$WITH_AUTO_RESUME" = "1" ]; then
   cp "$REPO_DIR/scripts/auto-resume.sh" "$SCRIPTS_DIR/"
   chmod +x "$SCRIPTS_DIR/auto-resume.sh"
+else
+  # A re-install with --no-auto-resume must actually remove a script left
+  # over from an earlier install — otherwise arm_resume's [ -f "$worker" ]
+  # gate stays satisfied and the user keeps getting what they opted out of.
+  # auto-resume.sh registers no Claude Code hook of its own, so no hook
+  # cleanup is needed here (see arm_resume's own AUTO_RESUME gate for the
+  # belt-and-braces check).
+  rm -f "$SCRIPTS_DIR/auto-resume.sh"
 fi
 if [ "$WITH_COMPACT_ADVISOR" = "1" ]; then
   cp "$REPO_DIR/scripts/compact-advisor.sh" "$SCRIPTS_DIR/"
   chmod +x "$SCRIPTS_DIR/compact-advisor.sh"
+else
+  rm -f "$SCRIPTS_DIR/compact-advisor.sh"
 fi
 
 cp "$REPO_DIR/VERSION" "$SCRIPTS_DIR/.limit-alerts-version"
@@ -156,9 +172,25 @@ fi
 if [ "$WITH_COMPACT_ADVISOR" = "1" ]; then
   register_compact_advisor_hook
   echo "    Compact advisor hook added: Stop"
+else
+  # Idempotent no-op on a fresh --no-compact-advisor install; on a re-install
+  # this actually unregisters the Stop hook a previous run added — otherwise
+  # the hook keeps firing against a script install.sh just deleted above.
+  remove_hook_matching "compact-advisor.sh"
 fi
 
+# Carry forward a previous run's AUTO_COMPACT_WINDOW_SET when this run omits
+# --auto-compact-window, instead of resetting it to 0. Without this, a plain
+# re-install (the documented way to pick up new flags/updates) would forget
+# that this project set ~/.claude/settings.json's autoCompactWindow, and
+# uninstall.sh would then leave that value behind forever instead of
+# removing it — a global Claude Code setting the project disowns but never
+# cleans up.
 AUTO_COMPACT_WINDOW_SET=0
+if [ -f "$SCRIPTS_DIR/.limit-alerts-options" ] && \
+   grep -q '^AUTO_COMPACT_WINDOW_SET=1$' "$SCRIPTS_DIR/.limit-alerts-options"; then
+  AUTO_COMPACT_WINDOW_SET=1
+fi
 if [ -n "$AUTO_COMPACT_WINDOW" ]; then
   if [ -n "${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}" ]; then
     echo "    Warning: CLAUDE_CODE_AUTO_COMPACT_WINDOW is set in your environment and takes precedence over this setting"
