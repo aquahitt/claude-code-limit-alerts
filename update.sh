@@ -50,6 +50,17 @@ REPO_VERSION="$(cat "$REPO_DIR/VERSION")"
 INSTALLED_VERSION="unknown"
 [ -f "$VERSION_FILE" ] && INSTALLED_VERSION="$(cat "$VERSION_FILE")"
 
+# Опции, выбранные при установке. Для установок, сделанных до появления
+# файла, новые фичи считаются выключенными — update.sh не включает то,
+# чего пользователь не ставил.
+OPTIONS_FILE="$SCRIPTS_DIR/.limit-alerts-options"
+OPT_AUTO_RESUME=0
+OPT_COMPACT_ADVISOR=0
+if [ -f "$OPTIONS_FILE" ]; then
+  if grep -q '^AUTO_RESUME=1$' "$OPTIONS_FILE"; then OPT_AUTO_RESUME=1; fi
+  if grep -q '^COMPACT_ADVISOR=1$' "$OPTIONS_FILE"; then OPT_COMPACT_ADVISOR=1; fi
+fi
+
 if [ -f "$PLIST" ]; then
   NEW_PLIST_TMP=$(mktemp)
   generate_plist "$REPO_DIR/launchd/com.claude.usage-monitor.plist.template" "$NEW_PLIST_TMP" "$PROXY_ARG" "$PLIST"
@@ -76,7 +87,12 @@ fi
 echo "==> Обновление: $INSTALLED_VERSION -> $REPO_VERSION"
 [ "$DRY_RUN" = "1" ] && echo "    (--dry-run: изменения не применяются)"
 
-for f in usage-monitor.sh statusline-with-limits.sh notify-attention.sh; do
+UPDATE_FILES="usage-monitor.sh statusline-with-limits.sh notify-attention.sh"
+if [ "$OPT_AUTO_RESUME" = "1" ]; then UPDATE_FILES="$UPDATE_FILES auto-resume.sh"; fi
+if [ "$OPT_COMPACT_ADVISOR" = "1" ]; then UPDATE_FILES="$UPDATE_FILES compact-advisor.sh"; fi
+
+# shellcheck disable=SC2086  # deliberate word splitting over a space-separated list
+for f in $UPDATE_FILES; do
   if [ -f "$SCRIPTS_DIR/$f" ]; then
     if [ "$DRY_RUN" = "1" ]; then
       echo "    would update: $SCRIPTS_DIR/$f"
@@ -88,6 +104,34 @@ for f in usage-monitor.sh statusline-with-limits.sh notify-attention.sh; do
   fi
 done
 
+OPT_LANG=""
+if [ -f "$OPTIONS_FILE" ]; then
+  OPT_LANG=$(sed -n 's/^LANG=//p' "$OPTIONS_FILE")
+fi
+
+if [ "$DRY_RUN" = "1" ]; then
+  echo "    would re-apply install-time defaults (--lang / statusline model flags)"
+else
+  if [ -n "$OPT_LANG" ] && [ "$OPT_LANG" != "ru" ]; then
+    # shellcheck disable=SC2086  # deliberate word splitting over a space-separated list
+    for f in $UPDATE_FILES; do
+      [ -f "$SCRIPTS_DIR/$f" ] && \
+        sed -i '' "s/\${UM_LANG:-ru}/\${UM_LANG:-$OPT_LANG}/" "$SCRIPTS_DIR/$f"
+    done
+  fi
+  if [ -f "$SCRIPTS_DIR/statusline-with-limits.sh" ]; then
+    if grep -q '^STATUSLINE_MODEL=0$' "$OPTIONS_FILE" 2>/dev/null; then
+      sed -i '' 's/\${UM_STATUSLINE_MODEL:-1}/\${UM_STATUSLINE_MODEL:-0}/' \
+        "$SCRIPTS_DIR/statusline-with-limits.sh"
+    fi
+    if grep -q '^SUBAGENT_MODEL=0$' "$OPTIONS_FILE" 2>/dev/null; then
+      sed -i '' 's/\${UM_SUBAGENT_MODEL:-1}/\${UM_SUBAGENT_MODEL:-0}/' \
+        "$SCRIPTS_DIR/statusline-with-limits.sh"
+    fi
+  fi
+  echo "    install-time defaults re-applied"
+fi
+
 if [ "$DRY_RUN" = "1" ]; then
   echo "    would re-check hook registration in $SETTINGS"
 else
@@ -95,6 +139,9 @@ else
   register_monitor_hooks
   if [ -f "$SCRIPTS_DIR/notify-attention.sh" ]; then
     register_attention_hooks
+  fi
+  if [ "$OPT_COMPACT_ADVISOR" = "1" ] && [ -f "$SCRIPTS_DIR/compact-advisor.sh" ]; then
+    register_compact_advisor_hook
   fi
   echo "    hooks reconciled (backup: $SETTINGS.bak.limit-alerts-update)"
 fi
@@ -104,6 +151,13 @@ if [ "$DRY_RUN" = "1" ]; then
 else
   echo "$REPO_VERSION" > "$VERSION_FILE"
   echo "    version marker updated"
+fi
+
+if [ ! -f "$OPTIONS_FILE" ]; then
+  echo
+  echo "==> Новое в этой версии (не включено, т.к. установка сделана раньше):"
+  echo "    авто-продолжение сессии после сброса лимита и подсказка о /compact."
+  echo "    Включить: ./install.sh (перечитает настройки, существующие хуки сохранятся)"
 fi
 
 echo
