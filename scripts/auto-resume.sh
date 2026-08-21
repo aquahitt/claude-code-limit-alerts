@@ -49,7 +49,11 @@ say() { # $1 = ru text, $2 = en text
 }
 
 SID=""
-PROMPT="${UM_RESUME_PROMPT:-$DEFAULT_PROMPT}"
+# `-` not `:-` on purpose: an explicitly empty UM_RESUME_PROMPT must survive as
+# empty ("resume with no first message"), the same as `--prompt ""`. With `:-`,
+# bash substitutes the default for an empty value too, so the documented
+# contract silently did the opposite.
+PROMPT="${UM_RESUME_PROMPT-$DEFAULT_PROMPT}"
 while [ $# -gt 0 ]; do
   case "$1" in
     --prompt)
