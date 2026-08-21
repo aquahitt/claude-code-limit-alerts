@@ -1,7 +1,15 @@
 #!/usr/bin/env bash
 # statusline-with-limits.sh — Claude Code statusline with usage limits.
 #
-# Renders:  <your existing statusline> | 5h 66% · 7d 7% · Fable 4%
+# Renders:  <your existing statusline> | Opus 5/high · ctx 72% · ⇢ Haiku 4.5 | 5h 66% · 7d 7% · wk Fable 4%
+#
+# The model segment comes entirely from the statusline's own stdin JSON, so it
+# costs no I/O. Every piece degrades on its own: no .effort in stdin drops
+# "/high", a null .context_window.used_percentage drops "ctx N%", and no
+# subagent on a different model drops the "⇢ …" part.
+#
+# "wk Fable 4%" is the weekly model-scoped LIMIT, not a running model — hence
+# the prefix, now that a real model name shares the line.
 #
 # Reads percentages from the usage-monitor cache only — no network calls,
 # so the statusline stays fast. The cache is refreshed by the launchd agent
@@ -12,14 +20,28 @@
 # only the limits are shown. install.sh preserves your previous statusline
 # command into that file automatically.
 #
-# Colors: green < WARN, yellow >= WARN (80), red >= CRIT (95).
-# Environment overrides: UM_WARN, UM_CRIT, UM_LANG=ru|en
+# Colors: green < WARN, yellow >= WARN (80), red >= CRIT (95). The context
+# percentage uses UM_COMPACT_WARN (70) / 90 instead — the same threshold
+# compact-advisor.sh signals on, so the two never contradict each other.
+#
+# Environment overrides:
+#   UM_WARN, UM_CRIT, UM_LANG=ru|en
+#   UM_STATUSLINE_MODEL=1  0 hides the whole model segment
+#   UM_STATUSLINE_CTX=1    0 hides "ctx N%"
+#   UM_SUBAGENT_MODEL=1    0 hides "⇢ <subagent model>"
+#   UM_SUBAGENT_TTL=180    how recently a subagent transcript must have been
+#                          written for the subagent to count as running, sec
 
 INPUT=$(cat)
 
 WARN="${UM_WARN:-80}"
 CRIT="${UM_CRIT:-95}"
 LANG_UM="${UM_LANG:-ru}"
+SL_MODEL="${UM_STATUSLINE_MODEL:-1}"
+SL_CTX="${UM_STATUSLINE_CTX:-1}"
+SL_SUBAGENT="${UM_SUBAGENT_MODEL:-1}"
+SUBAGENT_TTL="${UM_SUBAGENT_TTL:-180}"
+COMPACT_WARN="${UM_COMPACT_WARN:-70}"
 
 BASE=""
 BASE_CMD_FILE="$HOME/.claude/scripts/statusline-base.cmd"
@@ -30,7 +52,95 @@ fi
 CACHE="$HOME/.claude/scripts/usage-monitor-cache.json"
 JQ="$(command -v jq || echo /opt/homebrew/bin/jq)"
 
-if [ "$LANG_UM" = "en" ]; then L5="5h"; L7="7d"; else L5="5ч"; L7="7д"; fi
+if [ "$LANG_UM" = "en" ]; then L5="5h"; L7="7d"; WK="wk"; else L5="5ч"; L7="7д"; WK="нед."; fi
+
+colorize() { # percent -> colored "N%"
+  if   [ "$1" -ge "$CRIT" ]; then printf '\033[31m%s%%\033[0m' "$1"
+  elif [ "$1" -ge "$WARN" ]; then printf '\033[33m%s%%\033[0m' "$1"
+  else                            printf '\033[32m%s%%\033[0m' "$1"
+  fi
+}
+
+colorize_ctx() { # context percent -> colored "N%"
+  if   [ "$1" -ge 90 ];            then printf '\033[31m%s%%\033[0m' "$1"
+  elif [ "$1" -ge "$COMPACT_WARN" ]; then printf '\033[33m%s%%\033[0m' "$1"
+  else                                  printf '\033[32m%s%%\033[0m' "$1"
+  fi
+}
+
+# claude-haiku-4-5-20251001 -> "Haiku 4.5";  claude-opus-5 -> "Opus 5";
+# bare alias "haiku" -> "Haiku". A pure string transform on purpose: a lookup
+# table would need editing every time a model ships.
+prettify_model() {
+  local m="$1" family rest first
+  m="${m#claude-}"
+  case "$m" in
+    *-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) m="${m%-*}" ;;
+  esac
+  family="${m%%-*}"
+  if [ "$family" = "$m" ]; then rest=""; else rest="${m#*-}"; fi
+  first=$(printf '%s' "${family%"${family#?}"}" | tr '[:lower:]' '[:upper:]')
+  family="${first}${family#?}"
+  if [ -n "$rest" ]; then
+    printf '%s %s' "$family" "$(printf '%s' "$rest" | tr '-' '.')"
+  else
+    printf '%s' "$family"
+  fi
+}
+
+# Live subagents whose model differs from the session's, deduplicated with a
+# count. Liveness is the transcript's mtime: a background subagent's
+# tool_result lands in the main transcript immediately, so "unmatched
+# tool_use" would report finished agents as running, and the main transcript
+# is far too large to parse on every statusline redraw anyway.
+subagent_suffix() { # $1 transcript_path, $2 session_id, $3 session model id
+  [ "$SL_SUBAGENT" = "1" ] || return 0
+  [ -n "$1" ] && [ "$1" != "-" ] && [ -n "$2" ] && [ "$2" != "-" ] || return 0
+  local dir cutoff f mt mid pretty session_pretty models="" n=0
+  dir="$(dirname "$1")/$2/subagents"
+  [ -d "$dir" ] || return 0
+  cutoff=$(( $(date +%s) - SUBAGENT_TTL ))
+  session_pretty=$(prettify_model "$3")
+  for f in "$dir"/agent-*.jsonl; do
+    [ -f "$f" ] || continue
+    [ "$n" -ge 8 ] && break
+    mt=$(stat -f %m "$f" 2>/dev/null || echo 0)
+    [ "$mt" -ge "$cutoff" ] || continue
+    mid=$(tail -n 50 "$f" 2>/dev/null | "$JQ" -r 'select(.type == "assistant") | .message.model // empty' 2>/dev/null | tail -1)
+    [ -n "$mid" ] || mid=$("$JQ" -r '.model // empty' "${f%.jsonl}.meta.json" 2>/dev/null)
+    [ -n "$mid" ] || continue
+    pretty=$(prettify_model "$mid")
+    [ "$pretty" = "$session_pretty" ] && continue
+    models="${models}${pretty}
+"
+    n=$(( n + 1 ))
+  done
+  [ -n "$models" ] || return 0
+  printf '⇢ %s' "$(printf '%s' "$models" | sort | uniq -c | awk '
+    { c = $1; $1 = ""; sub(/^ /, "")
+      printf "%s%s", (NR > 1 ? ", " : ""), (c > 1 ? c "× " $0 : $0) }')"
+}
+
+MODEL_SEG=""
+if [ "$SL_MODEL" = "1" ] && [ -x "$JQ" ]; then
+  # tab-joined: display names ("Claude 3.5 Sonnet") and paths contain spaces
+  IFS=$'\t' read -r M_NAME M_ID M_EFF M_CTX M_SID M_TP <<< "$(printf '%s' "$INPUT" | "$JQ" -r '
+      [ (.model.display_name // "-"),
+        (.model.id // "-"),
+        (.effort.level // "-"),
+        ((.context_window.used_percentage // -1) | floor | tostring),
+        (.session_id // "-"),
+        (.transcript_path // "-") ] | join("\t")' 2>/dev/null)"
+  if [ -n "${M_NAME:-}" ] && [ "$M_NAME" != "-" ]; then
+    MODEL_SEG="$M_NAME"
+    [ "${M_EFF:--}" != "-" ] && MODEL_SEG="$MODEL_SEG/$M_EFF"
+    if [ "$SL_CTX" = "1" ] && [ "${M_CTX:--1}" -ge 0 ] 2>/dev/null; then
+      MODEL_SEG="$MODEL_SEG \033[2m·\033[0m ctx $(colorize_ctx "$M_CTX")"
+    fi
+    SUB=$(subagent_suffix "${M_TP:--}" "${M_SID:--}" "${M_ID:--}")
+    [ -n "$SUB" ] && MODEL_SEG="$MODEL_SEG \033[2m·\033[0m $SUB"
+  fi
+fi
 
 LIMITS=""
 if [ -f "$CACHE" ] && [ -x "$JQ" ]; then
@@ -39,21 +149,23 @@ if [ -f "$CACHE" ] && [ -x "$JQ" ]; then
       ([.limits[]? | select(.kind == "weekly_scoped")][0].percent // -1)] | map(floor) | join(" ")' \
     "$CACHE" 2>/dev/null)"
   if [ -n "$s" ]; then
-    colorize() { # percent -> colored "N%"
-      if   [ "$1" -ge "$CRIT" ]; then printf '\033[31m%s%%\033[0m' "$1"
-      elif [ "$1" -ge "$WARN" ]; then printf '\033[33m%s%%\033[0m' "$1"
-      else                            printf '\033[32m%s%%\033[0m' "$1"
-      fi
-    }
-    SEP=""
-    [ -n "$BASE" ] && SEP=" \033[2m|\033[0m "
-    LIMITS="${SEP}${L5} $(colorize "$s") \033[2m·\033[0m ${L7} $(colorize "$w")"
-    # model-scoped weekly limit (-1 = not present in cache, hidden)
+    LIMITS="${L5} $(colorize "$s") \033[2m·\033[0m ${L7} $(colorize "$w")"
+    # model-scoped weekly limit (-1 = not present in cache, hidden). The WK
+    # prefix keeps this from reading as "the model currently running".
     if [ "$f" -ge 0 ] 2>/dev/null; then
       MODEL=$("$JQ" -r '[.limits[]? | select(.kind == "weekly_scoped")][0].scope.model.display_name // ""' "$CACHE" 2>/dev/null)
-      [ -n "$MODEL" ] && LIMITS="$LIMITS \033[2m·\033[0m ${MODEL} $(colorize "$f")"
+      [ -n "$MODEL" ] && LIMITS="$LIMITS \033[2m·\033[0m ${WK} ${MODEL} $(colorize "$f")"
     fi
   fi
 fi
 
-printf '%b%b' "$BASE" "$LIMITS"
+# Segments joined with " | ", each one skipped when empty.
+SEP=" \033[2m|\033[0m "
+OUT="$BASE"
+for seg in "$MODEL_SEG" "$LIMITS"; do
+  [ -n "$seg" ] || continue
+  [ -n "$OUT" ] && OUT="${OUT}${SEP}"
+  OUT="${OUT}${seg}"
+done
+
+printf '%b' "$OUT"

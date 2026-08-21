@@ -28,6 +28,12 @@
 #                     window and start the waiting worker in it automatically
 #   --no-compact-advisor
 #                     skip compact-advisor.sh (the /compact signal)
+#   --no-statusline-model
+#                     statusline shows limits only (no model / effort /
+#                     context / subagent segment)
+#   --no-subagent-model
+#                     statusline shows the session model but not the model of
+#                     a running subagent
 #   --auto-compact-window <tokens>
 #                     set Claude Code's own auto-compact threshold in
 #                     ~/.claude/settings.json (100000..1000000). Off by
@@ -46,6 +52,8 @@ WITH_ATTENTION=1
 WITH_AUTO_RESUME=1
 AUTO_RESUME_AUTOSTART=0
 WITH_COMPACT_ADVISOR=1
+WITH_STATUSLINE_MODEL=1
+WITH_SUBAGENT_MODEL=1
 AUTO_COMPACT_WINDOW=""
 LANG_UM="ru"
 PROXY_URL=""
@@ -58,6 +66,8 @@ while [ $# -gt 0 ]; do
     --no-auto-resume) WITH_AUTO_RESUME=0 ;;
     --auto-resume-autostart) AUTO_RESUME_AUTOSTART=1 ;;
     --no-compact-advisor) WITH_COMPACT_ADVISOR=0 ;;
+    --no-statusline-model) WITH_STATUSLINE_MODEL=0 ;;
+    --no-subagent-model) WITH_SUBAGENT_MODEL=0 ;;
     --auto-compact-window) shift; AUTO_COMPACT_WINDOW="${1:-}" ;;
     --lang)          shift; LANG_UM="${1:-ru}" ;;
     --proxy)         shift; PROXY_URL="${1:-}"; PROXY_FLAG_SET=1 ;;
@@ -121,6 +131,15 @@ if [ "$LANG_UM" != "ru" ]; then
   done
 fi
 
+# Same sed-the-default mechanism as --lang above: baking the choice into the
+# installed copy keeps the statusline free of a config read on every redraw.
+if [ "$WITH_STATUSLINE_MODEL" = "0" ]; then
+  sed -i '' 's/\${UM_STATUSLINE_MODEL:-1}/\${UM_STATUSLINE_MODEL:-0}/' "$SCRIPTS_DIR/statusline-with-limits.sh"
+fi
+if [ "$WITH_SUBAGENT_MODEL" = "0" ]; then
+  sed -i '' 's/\${UM_SUBAGENT_MODEL:-1}/\${UM_SUBAGENT_MODEL:-0}/' "$SCRIPTS_DIR/statusline-with-limits.sh"
+fi
+
 echo "==> Updating $SETTINGS"
 [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
 cp "$SETTINGS" "$SETTINGS.bak.limit-alerts"
@@ -158,6 +177,8 @@ AUTO_RESUME=$WITH_AUTO_RESUME
 AUTO_RESUME_AUTOSTART=$AUTO_RESUME_AUTOSTART
 COMPACT_ADVISOR=$WITH_COMPACT_ADVISOR
 AUTO_COMPACT_WINDOW_SET=$AUTO_COMPACT_WINDOW_SET
+STATUSLINE_MODEL=$WITH_STATUSLINE_MODEL
+SUBAGENT_MODEL=$WITH_SUBAGENT_MODEL
 EOF
 
 if [ "$WITH_STATUSLINE" = "1" ]; then
