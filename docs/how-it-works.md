@@ -197,6 +197,15 @@ longer than the TTL (one long tool call) drops off the statusline, and a
 just-finished one lingers for up to the TTL. Same-model subagents are never
 shown; several on one model are collapsed into `⇢ 2× Haiku 4.5`.
 
+`adv Fable` names the model configured via Claude Code's `/advisor` command
+(`advisorModel` in `settings.json`), shown only when its family differs from
+the session's. Comparison is by family rather than by rendered name, because
+the setting stores an alias (`fable`) while the statusline receives the session
+model as a full id (`claude-opus-5`) — comparing the rendered forms would call
+`opus` and `Opus 5` different models. Advisor calls are separate requests with
+their own context: they do not fill the session window, so they are deliberately
+excluded from `ctx` and from the compact advisor's arithmetic.
+
 `wk Fable 4%` is the weekly model-**scoped limit**, not a running model. The
 `wk` / `нед.` prefix was added precisely because a real model name now shares
 the line.

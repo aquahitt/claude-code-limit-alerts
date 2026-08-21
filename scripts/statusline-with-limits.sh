@@ -32,6 +32,8 @@
 #   UM_WARN, UM_CRIT, UM_LANG=ru|en
 #   UM_STATUSLINE_MODEL=1  0 hides the whole model segment
 #   UM_STATUSLINE_CTX=1    0 hides "ctx N%"
+#   UM_STATUSLINE_ADVISOR=1  0 hides "adv <model>" (the /advisor model, shown
+#                          only when its family differs from the session's)
 #   UM_SUBAGENT_MODEL=1    0 hides "⇢ <subagent model>"
 #   UM_SUBAGENT_TTL=180    how recently a subagent transcript must have been
 #                          written for the subagent to count as running, sec
@@ -43,8 +45,10 @@ CRIT="${UM_CRIT:-95}"
 LANG_UM="${UM_LANG:-ru}"
 SL_MODEL="${UM_STATUSLINE_MODEL:-1}"
 SL_CTX="${UM_STATUSLINE_CTX:-1}"
+SL_ADVISOR="${UM_STATUSLINE_ADVISOR:-1}"
 SL_SUBAGENT="${UM_SUBAGENT_MODEL:-1}"
 SUBAGENT_TTL="${UM_SUBAGENT_TTL:-180}"
+SETTINGS="$HOME/.claude/settings.json"
 COMPACT_WARN="${UM_COMPACT_WARN:-70}"
 
 BASE=""
@@ -92,6 +96,46 @@ prettify_model() {
   fi
 }
 
+# Lowercase family token, for comparing models that may arrive in different
+# shapes: settings.json stores the advisor as an alias ("fable"), the
+# statusline receives the session model as a full id ("claude-opus-5"), and a
+# subagent's meta.json also carries an alias. Comparing prettified names
+# would call "opus" and "Opus 5" different models. Leading numeric segments
+# are skipped so legacy claude-<version>-<family> ids resolve to the family
+# too ("3-5-sonnet" -> "sonnet").
+model_family() { # $1 = model id or alias -> lowercase family, or $1 unchanged
+  local m tok
+  m=$(printf '%s' "$1" | tr '[:upper:]' '[:lower:]')
+  m="${m#claude-}"
+  case "$m" in
+    *-[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]) m="${m%-*}" ;;
+  esac
+  while [ -n "$m" ]; do
+    tok="${m%%-*}"
+    case "$tok" in
+      *[!0-9]*) printf '%s' "$tok"; return 0 ;;
+    esac
+    [ "$m" = "${m#*-}" ] && break
+    m="${m#*-}"
+  done
+  printf '%s' "$1"
+}
+
+# The model configured via /advisor, when it is a different family from the
+# session's. Read from settings.json, the same file the ctx denominator's
+# autoCompactWindow comes from. Advisor calls are separate requests with their
+# own context — they do not fill the session window — so this is purely a
+# "what am I consulting" indicator.
+advisor_suffix() { # $1 = session model id
+  [ "$SL_ADVISOR" = "1" ] || return 0
+  [ -f "$SETTINGS" ] || return 0
+  local adv
+  adv=$("$JQ" -r '.advisorModel // empty' "$SETTINGS" 2>/dev/null) || return 0
+  [ -n "$adv" ] || return 0
+  [ "$(model_family "$adv")" = "$(model_family "$1")" ] && return 0
+  printf 'adv %s' "$(prettify_model "$adv")"
+}
+
 # Live subagents whose model differs from the session's, deduplicated with a
 # count. Liveness is the transcript's mtime: a background subagent's
 # tool_result lands in the main transcript immediately, so "unmatched
@@ -111,7 +155,7 @@ subagent_suffix() { # $1 transcript_path, $2 session_id, $3 session model id
   dir="$(dirname "$1")/$2/subagents"
   [ -d "$dir" ] || return 0
   cutoff=$(( $(date +%s) - SUBAGENT_TTL ))
-  session_pretty=$(prettify_model "$3")
+  session_pretty=$(model_family "$3")
   # shellcheck disable=SC2045  # agent-<hex>.jsonl names are whitespace-free by construction
   for f in $(ls -t "$dir"/agent-*.jsonl 2>/dev/null | head -n 12); do
     [ -f "$f" ] || continue
@@ -122,7 +166,7 @@ subagent_suffix() { # $1 transcript_path, $2 session_id, $3 session model id
     [ -n "$mid" ] || mid=$("$JQ" -r '.model // empty' "${f%.jsonl}.meta.json" 2>/dev/null)
     [ -n "$mid" ] || continue
     pretty=$(prettify_model "$mid")
-    [ "$pretty" = "$session_pretty" ] && continue
+    [ "$(model_family "$mid")" = "$session_pretty" ] && continue
     models="${models}${pretty}
 "
     n=$(( n + 1 ))
@@ -146,6 +190,8 @@ if [ "$SL_MODEL" = "1" ] && [ -x "$JQ" ]; then
   if [ -n "${M_NAME:-}" ] && [ "$M_NAME" != "-" ]; then
     MODEL_SEG="$M_NAME"
     [ "${M_EFF:--}" != "-" ] && MODEL_SEG="$MODEL_SEG/$M_EFF"
+    ADV=$(advisor_suffix "${M_ID:--}")
+    [ -n "$ADV" ] && MODEL_SEG="$MODEL_SEG \033[2m·\033[0m $ADV"
     if [ "$SL_CTX" = "1" ] && [ "${M_CTX:--1}" -ge 0 ] 2>/dev/null; then
       MODEL_SEG="$MODEL_SEG \033[2m·\033[0m ctx $(colorize_ctx "$M_CTX")"
     fi

@@ -101,7 +101,7 @@ its `effort` level and how full the context is — and, when a subagent runs on
 a different model, that model too:
 
 ```
-myproject (main) | Opus 5/high · ctx 72% · ⇢ Haiku 4.5 | 5h 66% · 7d 7% · wk Fable 4%
+myproject (main) | Opus 5/high · adv Fable · ctx 72% · ⇢ Haiku 4.5 | 5h 66% · 7d 7% · wk Fable 4%
 ```
 
 All of that arrives on the statusline's stdin, so the segment costs no network
@@ -112,8 +112,16 @@ subagent that stays silent longer than that — one long tool call — drops off
 the line until it writes again. Subagents on the session's own model are never
 shown; several on one model collapse into `⇢ 2× Haiku 4.5`.
 
+`adv Fable` is Claude Code's own advisor model (the `/advisor` command, stored
+as `advisorModel` in `settings.json`). It appears only when its family differs
+from the session's, so `advisorModel: opus` under an Opus session adds nothing.
+Advisor calls are separate requests with their own context — they do not fill
+the session window and do not affect `ctx`.
+
 `wk Fable 4%` is the weekly **model-scoped limit**, not a running model — the
-prefix exists precisely because a real model name now shares the line.
+prefix exists precisely because a real model name now shares the line. Do not
+confuse it with `adv Fable`: the first is how much of that model's weekly quota
+is left, the second is what you are consulting.
 
 Turn any of it off: `./install.sh --no-auto-resume`,
 `./install.sh --no-compact-advisor`, `./install.sh --no-statusline-model`,
@@ -185,6 +193,7 @@ the defaults at the top of `usage-monitor.sh`):
 | `UM_STATUSLINE_CTX` | `1` | show `ctx N%` inside the model segment |
 | `UM_SUBAGENT_MODEL` | `1` | show the model of a running subagent |
 | `UM_SUBAGENT_TTL` | `180` | how recently a subagent must have written for it to count as running, seconds |
+| `UM_STATUSLINE_ADVISOR` | `1` | show the advisor model (`/advisor`) |
 
 The background check interval is `StartInterval` (seconds) in
 `~/Library/LaunchAgents/com.claude.usage-monitor.plist`.
