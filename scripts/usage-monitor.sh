@@ -271,6 +271,13 @@ msg_reset() { # $1 label, $2 old pct, $3 new pct
   if [ "$LANG_UM" = "en" ]; then echo "♻️ ${1} limit was reset (was ${2}%, now ${3}%)"
   else echo "♻️ Лимит «${1}» сброшен (было ${2}%, сейчас ${3}%)"; fi
 }
+msg_blocked() { # $1 reset time, $2 resume command
+  if [ "$LANG_UM" = "en" ]; then
+    echo "🚫 Session limit exhausted, resets at ${1}. Auto-continue: ${2}"
+  else
+    echo "🚫 Лимит сессии исчерпан, сброс в ${1}. Продолжить автоматически: ${2}"
+  fi
+}
 notif_title() {
   if [ "$LANG_UM" = "en" ]; then echo "Claude Code — usage limits"
   else echo "Claude Code — лимиты"; fi
@@ -280,6 +287,62 @@ notify_mac() { # $1 title, $2 body
   # sound played directly — works even without Notification Center permission
   afplay "/System/Library/Sounds/Glass.aiff" >/dev/null 2>&1 || true
   osascript -e "display notification \"$2\" with title \"$1\" sound name \"Glass\"" >/dev/null 2>&1 || true
+}
+
+# Opens a NEW terminal window (never touches an existing one) and starts the
+# waiting worker in it. Only used when the user opted in at install time.
+open_resume_window() {
+  local cmd="$1"
+  if pgrep -x iTerm2 >/dev/null 2>&1; then
+    osascript -e 'on run argv' \
+      -e 'tell application "iTerm2" to tell (create window with default profile) to tell current session to write text (item 1 of argv)' \
+      -e 'end run' -- "$cmd" >/dev/null 2>&1 || true
+  else
+    osascript -e 'on run argv' \
+      -e 'tell application "Terminal" to do script (item 1 of argv)' \
+      -e 'tell application "Terminal" to activate' \
+      -e 'end run' -- "$cmd" >/dev/null 2>&1 || true
+  fi
+}
+
+# Marks the recorded session as "waiting for a reset" and tells the user how
+# to continue it. Fires at most once per limit window (guarded by
+# .notified_for, which stores the window's resets_at). Requires a recently
+# active session — an hours-old session id is not something the user still
+# wants resumed.
+arm_resume() { # $1 = resets_at of the session limit
+  local resets="$1" sid cwd seen_at now age notified worker lock pid
+  worker="$DIR/auto-resume.sh"
+  [ -f "$worker" ] || return 0
+  [ -f "$RESUME_STATE" ] || return 0
+  sid=$("$JQ" -r '.session_id // ""' "$RESUME_STATE" 2>/dev/null) || return 0
+  [ -n "$sid" ] || return 0
+  cwd=$("$JQ" -r '.cwd // ""' "$RESUME_STATE" 2>/dev/null) || cwd=""
+  [ -n "$cwd" ] && [ -d "$cwd" ] || return 0
+  seen_at=$("$JQ" -r '.seen_at // 0' "$RESUME_STATE" 2>/dev/null) || return 0
+  now=$(date +%s)
+  age=$(( now - seen_at ))
+  [ "$age" -lt "$SESSION_TTL" ] || return 0
+  notified=$("$JQ" -r '.notified_for // ""' "$RESUME_STATE" 2>/dev/null) || notified=""
+  [ "$notified" = "$resets" ] && return 0
+
+  local state
+  state=$("$JQ" --arg r "$resets" '.armed = true | .resets_at = $r | .notified_for = $r' \
+    "$RESUME_STATE" 2>/dev/null) || return 0
+  printf '%s\n' "$state" > "$RESUME_STATE"
+
+  local cmd="bash \"\$HOME/.claude/scripts/auto-resume.sh\""
+  MESSAGES+=("$(msg_blocked "$(to_local "$resets" "+%H:%M")" "$cmd")")
+  printf '%s' "$cmd" | pbcopy >/dev/null 2>&1 || true
+
+  # autostart: opt-in, and never while a worker for this session is alive
+  grep -q '^AUTO_RESUME_AUTOSTART=1$' "$DIR/.limit-alerts-options" 2>/dev/null || return 0
+  lock="$DIR/auto-resume-$sid.lock"
+  if [ -f "$lock" ]; then
+    pid=$(cat "$lock" 2>/dev/null) || pid=""
+    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && return 0
+  fi
+  open_resume_window "bash \"$worker\""
 }
 
 to_local() { # $1 = ISO8601 UTC timestamp, $2 = output format
@@ -351,6 +414,11 @@ while IFS='|' read -r kind percent resets scope; do
   elif [ "$pct" -ge "$WARN" ] && [ "$notified" -lt "$WARN" ]; then
     MESSAGES+=("$(msg_warn "$label" "$pct" "$(to_local "$resets" "+%H:%M")")")
     notified=$WARN
+  fi
+
+  # blocked session: the 5h window is effectively spent
+  if [ "$kind" = "session" ] && [ "$pct" -ge "$BLOCK_PCT" ]; then
+    arm_resume "$resets" || true
   fi
 
   NEW_STATE=$(echo "$NEW_STATE" | "$JQ" --arg k "$key" --argjson p "$pct" --arg r "$resets" --argjson n "$notified" \
