@@ -10,6 +10,9 @@
 #            {"systemMessage": "..."} JSON only when there is news
 #   cron   — called from launchd every N minutes; sends macOS notifications
 #   status — human-readable snapshot of all limits
+#   limits — machine-readable snapshot: one "kind|percent|resets_at|scope"
+#            line per limit, no header, no localization (used by
+#            auto-resume.sh; pair with UM_CACHE_TTL=0 to bypass the cache)
 #
 # Notifications are sent once per threshold per window (no spam):
 #   WARN  (default 80%)  🟡
@@ -35,6 +38,46 @@ CACHE="$DIR/usage-monitor-cache.json"
 JQ="$(command -v jq || echo /opt/homebrew/bin/jq)"
 [ -x "$JQ" ] || exit 0
 
+RESUME_STATE="$DIR/auto-resume-state.json"
+BLOCK_PCT="${UM_BLOCK_PCT:-99}"
+SESSION_TTL="${UM_SESSION_TTL:-1800}"
+
+# In hook mode the event JSON arrives on stdin (session_id, cwd,
+# transcript_path). It is the only reliable way to know which session the
+# user is actually in — picking the newest-mtime transcript under
+# ~/.claude/projects would just as often find a subagent or another window.
+# `[ ! -t 0 ]` keeps a manual `usage-monitor.sh hook` from a terminal from
+# hanging on a read that will never arrive.
+HOOK_INPUT=""
+if [ "$MODE" = "hook" ] && [ ! -t 0 ]; then
+  HOOK_INPUT=$(cat)
+fi
+
+# Records the session so auto-resume.sh knows what to resume later. Every
+# failure is swallowed: this must never break a user's turn. When the session
+# id changes, the armed state of the previous session is dropped — it belongs
+# to a session the user has already left.
+record_session() {
+  [ -n "$HOOK_INPUT" ] || return 0
+  local sid cwd tp prev_sid now state
+  sid=$(printf '%s' "$HOOK_INPUT" | "$JQ" -r '.session_id // empty' 2>/dev/null) || return 0
+  [ -n "$sid" ] || return 0
+  cwd=$(printf '%s' "$HOOK_INPUT" | "$JQ" -r '.cwd // empty' 2>/dev/null) || cwd=""
+  tp=$(printf '%s' "$HOOK_INPUT" | "$JQ" -r '.transcript_path // empty' 2>/dev/null) || tp=""
+  now=$(date +%s)
+  [ -f "$RESUME_STATE" ] || echo '{}' > "$RESUME_STATE"
+  prev_sid=$("$JQ" -r '.session_id // ""' "$RESUME_STATE" 2>/dev/null) || prev_sid=""
+  state=$("$JQ" --arg s "$sid" --arg c "$cwd" --arg t "$tp" --argjson n "$now" '
+      .session_id = $s | .cwd = $c | .transcript_path = $t | .seen_at = $n
+      | .armed //= false | .resets_at //= "" | .notified_for //= ""
+    ' "$RESUME_STATE" 2>/dev/null) || return 0
+  if [ -n "$prev_sid" ] && [ "$prev_sid" != "$sid" ]; then
+    state=$(printf '%s' "$state" | "$JQ" '.armed = false | .resets_at = "" | .notified_for = ""' 2>/dev/null) || return 0
+  fi
+  printf '%s\n' "$state" > "$RESUME_STATE"
+}
+record_session || true
+
 LOG="$DIR/usage-monitor.log"
 LOG_MAX_BYTES=$((1024 * 1024)) # 1MB
 LOG_KEEP_LINES=2000
@@ -51,7 +94,7 @@ rotate_log_if_needed() {
 rotate_log_if_needed
 
 log_note() {
-  [ "$MODE" = "status" ] && return 0
+  case "$MODE" in status|limits) return 0 ;; esac
   echo "$(date '+%F %T') [$MODE] $1" >> "$LOG"
 }
 log_fetch_fail() { log_note "fetch failed: $1"; } # silent fetch failures used to leave no trace at all
@@ -236,6 +279,11 @@ USAGE=$(fetch_usage) || exit 0
 # limits[] -> "kind|percent|resets_at|scope" lines
 LIMITS=$(echo "$USAGE" | "$JQ" -r \
   '.limits[] | [.kind, (.percent // 0), (.resets_at // ""), (.scope.model.display_name // "")] | join("|")')
+
+if [ "$MODE" = "limits" ]; then
+  printf '%s\n' "$LIMITS"
+  exit 0
+fi
 
 if [ "$MODE" = "status" ]; then
   if [ -f "$DIR/.limit-alerts-version" ]; then
