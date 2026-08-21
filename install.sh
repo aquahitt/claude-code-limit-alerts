@@ -21,6 +21,17 @@
 #                     from HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY, case-
 #                     insensitive, in the current shell); "" disables
 #                     passthrough entirely
+#   --no-auto-resume  skip auto-resume.sh (continuing a session after a
+#                     limit reset)
+#   --auto-resume-autostart
+#                     when a limit blocks the session, open a NEW terminal
+#                     window and start the waiting worker in it automatically
+#   --no-compact-advisor
+#                     skip compact-advisor.sh (the /compact signal)
+#   --auto-compact-window <tokens>
+#                     set Claude Code's own auto-compact threshold in
+#                     ~/.claude/settings.json (100000..1000000). Off by
+#                     default: this changes behaviour for ALL your sessions.
 
 set -euo pipefail
 
@@ -32,6 +43,10 @@ fi
 WITH_STATUSLINE=1
 WITH_LAUNCHD=1
 WITH_ATTENTION=1
+WITH_AUTO_RESUME=1
+AUTO_RESUME_AUTOSTART=0
+WITH_COMPACT_ADVISOR=1
+AUTO_COMPACT_WINDOW=""
 LANG_UM="ru"
 PROXY_URL=""
 PROXY_FLAG_SET=0
@@ -40,12 +55,33 @@ while [ $# -gt 0 ]; do
     --no-statusline) WITH_STATUSLINE=0 ;;
     --no-launchd)    WITH_LAUNCHD=0 ;;
     --no-attention)  WITH_ATTENTION=0 ;;
+    --no-auto-resume) WITH_AUTO_RESUME=0 ;;
+    --auto-resume-autostart) AUTO_RESUME_AUTOSTART=1 ;;
+    --no-compact-advisor) WITH_COMPACT_ADVISOR=0 ;;
+    --auto-compact-window) shift; AUTO_COMPACT_WINDOW="${1:-}" ;;
     --lang)          shift; LANG_UM="${1:-ru}" ;;
     --proxy)         shift; PROXY_URL="${1:-}"; PROXY_FLAG_SET=1 ;;
     *) echo "Unknown flag: $1" >&2; exit 1 ;;
   esac
   shift
 done
+
+# Range copied from the CLI's own parse error: "Expected 'auto' or 100k-1M
+# tokens". Anything outside it would be silently clamped or ignored.
+if [ -n "$AUTO_COMPACT_WINDOW" ]; then
+  case "$AUTO_COMPACT_WINDOW" in
+    ''|*[!0-9]*) echo "--auto-compact-window expects an integer number of tokens" >&2; exit 1 ;;
+  esac
+  if [ "$AUTO_COMPACT_WINDOW" -lt 100000 ] || [ "$AUTO_COMPACT_WINDOW" -gt 1000000 ]; then
+    echo "--auto-compact-window must be between 100000 and 1000000 tokens" >&2
+    exit 1
+  fi
+fi
+
+if [ "$AUTO_RESUME_AUTOSTART" = "1" ] && [ "$WITH_AUTO_RESUME" = "0" ]; then
+  echo "--auto-resume-autostart cannot be combined with --no-auto-resume" >&2
+  exit 1
+fi
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$REPO_DIR/lib/hooks.sh"
@@ -67,12 +103,20 @@ if [ "$WITH_ATTENTION" = "1" ]; then
   cp "$REPO_DIR/scripts/notify-attention.sh" "$SCRIPTS_DIR/"
   chmod +x "$SCRIPTS_DIR/notify-attention.sh"
 fi
+if [ "$WITH_AUTO_RESUME" = "1" ]; then
+  cp "$REPO_DIR/scripts/auto-resume.sh" "$SCRIPTS_DIR/"
+  chmod +x "$SCRIPTS_DIR/auto-resume.sh"
+fi
+if [ "$WITH_COMPACT_ADVISOR" = "1" ]; then
+  cp "$REPO_DIR/scripts/compact-advisor.sh" "$SCRIPTS_DIR/"
+  chmod +x "$SCRIPTS_DIR/compact-advisor.sh"
+fi
 
 cp "$REPO_DIR/VERSION" "$SCRIPTS_DIR/.limit-alerts-version"
 
 # persist language choice by changing the env default (only if not ru)
 if [ "$LANG_UM" != "ru" ]; then
-  for f in usage-monitor.sh statusline-with-limits.sh notify-attention.sh; do
+  for f in usage-monitor.sh statusline-with-limits.sh notify-attention.sh auto-resume.sh compact-advisor.sh; do
     [ -f "$SCRIPTS_DIR/$f" ] && sed -i '' "s/\${UM_LANG:-ru}/\${UM_LANG:-$LANG_UM}/" "$SCRIPTS_DIR/$f"
   done
 fi
@@ -89,6 +133,32 @@ if [ "$WITH_ATTENTION" = "1" ]; then
   register_attention_hooks
   echo "    Attention hooks added: Notification, Stop"
 fi
+
+if [ "$WITH_COMPACT_ADVISOR" = "1" ]; then
+  register_compact_advisor_hook
+  echo "    Compact advisor hook added: Stop"
+fi
+
+AUTO_COMPACT_WINDOW_SET=0
+if [ -n "$AUTO_COMPACT_WINDOW" ]; then
+  if [ -n "${CLAUDE_CODE_AUTO_COMPACT_WINDOW:-}" ]; then
+    echo "    Warning: CLAUDE_CODE_AUTO_COMPACT_WINDOW is set in your environment and takes precedence over this setting"
+  fi
+  updated=$("$JQ" --argjson w "$AUTO_COMPACT_WINDOW" '.autoCompactWindow = $w' "$SETTINGS")
+  echo "$updated" > "$SETTINGS"
+  AUTO_COMPACT_WINDOW_SET=1
+  echo "    Auto-compact window set to $AUTO_COMPACT_WINDOW tokens"
+fi
+
+# Recorded because update.sh cannot otherwise tell an opted-out feature from
+# a not-yet-installed one — file presence says nothing about autostart.
+cat > "$SCRIPTS_DIR/.limit-alerts-options" <<EOF
+LANG=$LANG_UM
+AUTO_RESUME=$WITH_AUTO_RESUME
+AUTO_RESUME_AUTOSTART=$AUTO_RESUME_AUTOSTART
+COMPACT_ADVISOR=$WITH_COMPACT_ADVISOR
+AUTO_COMPACT_WINDOW_SET=$AUTO_COMPACT_WINDOW_SET
+EOF
 
 if [ "$WITH_STATUSLINE" = "1" ]; then
   # preserve the current statusline command so the wrapper keeps rendering it

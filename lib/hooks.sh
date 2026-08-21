@@ -41,3 +41,9 @@ register_attention_hooks() {
   add_hook "Stop" "$("$JQ" -n '{type: "command",
     command: "bash \"$HOME/.claude/scripts/notify-attention.sh\" stop", async: true}')"
 }
+
+# Регистрирует Stop -> compact-advisor.sh. Требует $JQ, $SETTINGS.
+register_compact_advisor_hook() {
+  add_hook "Stop" "$("$JQ" -n '{type: "command",
+    command: "bash \"$HOME/.claude/scripts/compact-advisor.sh\"", timeout: 10}')"
+}
