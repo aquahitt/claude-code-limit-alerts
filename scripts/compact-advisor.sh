@@ -89,17 +89,35 @@ pct=$(( tokens * 100 / window ))
 
 # one signal per 10-point step per session
 step=$(( pct / 10 * 10 ))
-[ -f "$STATE" ] || echo '{}' > "$STATE"
-prev=$("$JQ" -r --arg s "$sid" '.[$s].step // 0' "$STATE" 2>/dev/null) || prev=0
+# A missing OR corrupt state file is treated the same way: recover to a
+# clean object instead of leaving anti-spam permanently disabled. Without
+# this, one bad write (interrupted, or a race between two hook invocations
+# sharing this single global path across Claude Code windows) would corrupt
+# the file forever — every future jq read would fail, prev would fall back
+# to 0, and the hook would fire on every single turn past the threshold
+# instead of once per 10-point step.
+current='{}'
+if [ -f "$STATE" ]; then
+  existing=$(cat "$STATE" 2>/dev/null) || existing=""
+  if [ -n "$existing" ] && printf '%s' "$existing" | "$JQ" -e . >/dev/null 2>&1; then
+    current="$existing"
+  fi
+fi
+prev=$(printf '%s' "$current" | "$JQ" -r --arg s "$sid" '.[$s].step // 0' 2>/dev/null) || prev=0
 case "$prev" in ''|*[!0-9]*) prev=0 ;; esac
 [ "$step" -gt "$prev" ] || exit 0
 
 now=$(date +%s)
 cutoff=$(( now - 604800 ))
-new_state=$("$JQ" --arg s "$sid" --argjson st "$step" --argjson n "$now" --argjson c "$cutoff" '
-    with_entries(select(.value.at // 0 > $c)) | .[$s] = {step: $st, at: $n}
-  ' "$STATE" 2>/dev/null) || new_state=""
-[ -n "$new_state" ] && printf '%s\n' "$new_state" > "$STATE"
+new_state=$(printf '%s' "$current" | "$JQ" --arg s "$sid" --argjson st "$step" --argjson n "$now" --argjson c "$cutoff" '
+    with_entries(select((.value.at // 0) > $c)) | .[$s] = {step: $st, at: $n}
+  ' 2>/dev/null) || new_state=""
+# Atomic write, matching record_session()'s tmp+mv pattern in
+# usage-monitor.sh — an interrupted write never leaves $STATE half-written
+# or corrupt.
+if [ -n "$new_state" ]; then
+  printf '%s\n' "$new_state" > "$STATE.tmp" 2>/dev/null && mv "$STATE.tmp" "$STATE"
+fi
 
 tok_k=$(( tokens / 1000 ))
 win_k=$(( window / 1000 ))
