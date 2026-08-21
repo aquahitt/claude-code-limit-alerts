@@ -93,6 +93,13 @@ prettify_model() {
 # tool_result lands in the main transcript immediately, so "unmatched
 # tool_use" would report finished agents as running, and the main transcript
 # is far too large to parse on every statusline redraw anyway.
+#
+# Two bounds, doing two different jobs: the `ls -t | head -n 12` enumerates
+# at most the 12 newest files (so a directory full of long-stale subagents
+# from past sessions never gets `stat`-ed one-by-one), and `n -ge 8` caps how
+# many *collected* (live, non-session-model) entries get rendered. Newest-
+# first ordering is what makes 12 safe — a live subagent is by definition
+# one written within UM_SUBAGENT_TTL, so it's always among the newest files.
 subagent_suffix() { # $1 transcript_path, $2 session_id, $3 session model id
   [ "$SL_SUBAGENT" = "1" ] || return 0
   [ -n "$1" ] && [ "$1" != "-" ] && [ -n "$2" ] && [ "$2" != "-" ] || return 0
@@ -101,7 +108,8 @@ subagent_suffix() { # $1 transcript_path, $2 session_id, $3 session model id
   [ -d "$dir" ] || return 0
   cutoff=$(( $(date +%s) - SUBAGENT_TTL ))
   session_pretty=$(prettify_model "$3")
-  for f in "$dir"/agent-*.jsonl; do
+  # shellcheck disable=SC2045  # agent-<hex>.jsonl names are whitespace-free by construction
+  for f in $(ls -t "$dir"/agent-*.jsonl 2>/dev/null | head -n 12); do
     [ -f "$f" ] || continue
     [ "$n" -ge 8 ] && break
     mt=$(stat -f %m "$f" 2>/dev/null || echo 0)
