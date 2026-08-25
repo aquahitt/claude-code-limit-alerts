@@ -2,6 +2,28 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии — [SemVer](https://semver.org/lang/ru/).
 
+## [0.5.0] - 2026-08-25
+
+### Removed
+
+- Авто-продолжение сессии после сброса лимита целиком: скрипт
+  `auto-resume.sh` и его состояние `auto-resume-state.json`, уведомление 🚫 с
+  командой продолжения, автозапуск воркера в новом окне терминала, флаги
+  `install.sh` `--no-auto-resume` и `--auto-resume-autostart`, переменные
+  `UM_BLOCK_PCT`, `UM_SESSION_TTL`, `UM_RESUME_PROMPT`, `UM_RESUME_MAX_WAIT`.
+
+  Причина: Claude Code 2.1+ делает это сам — тумблер «Continue automatically
+  at usage limit» в `/config` (`autoContinueAtUsageLimit` в
+  `~/.claude/settings.json`). Встроенное продолжение не требует ни выхода из
+  сессии, ни второго терминала, ни `--resume`, а внешний воркер требовал всего
+  этого — и, работая рядом со встроенным, продолжал бы один разговор дважды,
+  двумя процессами на один `session_id`.
+
+  `install.sh` и `update.sh` при обновлении удаляют оставшиеся от прежних
+  версий `auto-resume.sh`, файл состояния и lock-файлы. Мониторинг лимитов,
+  пороги 🟡/🔴, уведомление о сбросе окна, statusline и подсказка о `/compact`
+  не изменились; `usage-monitor.sh limits` сохранён.
+
 ## [0.4.0] - 2026-08-21
 
 ### Added
