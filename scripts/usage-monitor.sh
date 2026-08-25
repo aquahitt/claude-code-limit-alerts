@@ -11,8 +11,8 @@
 #   cron   — called from launchd every N minutes; sends macOS notifications
 #   status — human-readable snapshot of all limits
 #   limits — machine-readable snapshot: one "kind|percent|resets_at|scope"
-#            line per limit, no header, no localization (used by
-#            auto-resume.sh; pair with UM_CACHE_TTL=0 to bypass the cache)
+#            line per limit, no header, no localization (pair with
+#            UM_CACHE_TTL=0 to bypass the cache)
 #
 # Notifications are sent once per threshold per window (no spam):
 #   WARN  (default 80%)  🟡
@@ -37,60 +37,6 @@ CACHE="$DIR/usage-monitor-cache.json"
 
 JQ="$(command -v jq || echo /opt/homebrew/bin/jq)"
 [ -x "$JQ" ] || exit 0
-
-RESUME_STATE="$DIR/auto-resume-state.json"
-BLOCK_PCT="${UM_BLOCK_PCT:-99}"
-SESSION_TTL="${UM_SESSION_TTL:-1800}"
-
-# In hook mode the event JSON arrives on stdin (session_id, cwd,
-# transcript_path). It is the only reliable way to know which session the
-# user is actually in — picking the newest-mtime transcript under
-# ~/.claude/projects would just as often find a subagent or another window.
-# `[ ! -t 0 ]` keeps a manual `usage-monitor.sh hook` from a terminal from
-# hanging on a read that will never arrive.
-HOOK_INPUT=""
-if [ "$MODE" = "hook" ] && [ ! -t 0 ]; then
-  HOOK_INPUT=$(cat)
-fi
-
-# Records the session so auto-resume.sh knows what to resume later. Every
-# failure is swallowed: this must never break a user's turn. When the session
-# id changes, the armed state of the previous session is dropped — it belongs
-# to a session the user has already left.
-record_session() {
-  [ -n "$HOOK_INPUT" ] || return 0
-  local sid cwd tp prev_sid now state current existing
-  sid=$(printf '%s' "$HOOK_INPUT" | "$JQ" -r '.session_id // empty' 2>/dev/null) || return 0
-  [ -n "$sid" ] || return 0
-  cwd=$(printf '%s' "$HOOK_INPUT" | "$JQ" -r '.cwd // empty' 2>/dev/null) || cwd=""
-  tp=$(printf '%s' "$HOOK_INPUT" | "$JQ" -r '.transcript_path // empty' 2>/dev/null) || tp=""
-  now=$(date +%s)
-  # A missing OR corrupt state file is treated the same way: recover to a
-  # clean object instead of leaving auto-resume permanently dead. Without
-  # this, one bad write (interrupted, or a race between two hook
-  # invocations sharing this single global path across Claude Code windows)
-  # would corrupt the file forever — every future jq read would fail and
-  # record_session would keep bailing out via `|| return 0`.
-  current='{}'
-  if [ -f "$RESUME_STATE" ]; then
-    existing=$(cat "$RESUME_STATE" 2>/dev/null) || existing=""
-    if [ -n "$existing" ] && printf '%s' "$existing" | "$JQ" -e . >/dev/null 2>&1; then
-      current="$existing"
-    fi
-  fi
-  prev_sid=$(printf '%s' "$current" | "$JQ" -r '.session_id // ""' 2>/dev/null) || prev_sid=""
-  state=$(printf '%s' "$current" | "$JQ" --arg s "$sid" --arg c "$cwd" --arg t "$tp" --argjson n "$now" '
-      .session_id = $s | .cwd = $c | .transcript_path = $t | .seen_at = $n
-      | .armed //= false | .resets_at //= "" | .notified_for //= ""
-    ' 2>/dev/null) || return 0
-  if [ -n "$prev_sid" ] && [ "$prev_sid" != "$sid" ]; then
-    state=$(printf '%s' "$state" | "$JQ" '.armed = false | .resets_at = "" | .notified_for = ""' 2>/dev/null) || return 0
-  fi
-  # Atomic write, matching rotate_log_if_needed()'s tmp+mv pattern below —
-  # an interrupted write never leaves $RESUME_STATE half-written.
-  printf '%s\n' "$state" > "$RESUME_STATE.tmp" 2>/dev/null && mv "$RESUME_STATE.tmp" "$RESUME_STATE"
-}
-record_session || true
 
 LOG="$DIR/usage-monitor.log"
 LOG_MAX_BYTES=$((1024 * 1024)) # 1MB
@@ -271,13 +217,6 @@ msg_reset() { # $1 label, $2 old pct, $3 new pct
   if [ "$LANG_UM" = "en" ]; then echo "♻️ ${1} limit was reset (was ${2}%, now ${3}%)"
   else echo "♻️ Лимит «${1}» сброшен (было ${2}%, сейчас ${3}%)"; fi
 }
-msg_blocked() { # $1 reset time, $2 resume command
-  if [ "$LANG_UM" = "en" ]; then
-    echo "🚫 Session limit exhausted, resets at ${1}. Auto-continue: ${2}"
-  else
-    echo "🚫 Лимит сессии исчерпан, сброс в ${1}. Продолжить автоматически: ${2}"
-  fi
-}
 notif_title() {
   if [ "$LANG_UM" = "en" ]; then echo "Claude Code — usage limits"
   else echo "Claude Code — лимиты"; fi
@@ -286,11 +225,10 @@ notif_title() {
 notify_mac() { # $1 title, $2 body
   # sound played directly — works even without Notification Center permission
   afplay "/System/Library/Sounds/Glass.aiff" >/dev/null 2>&1 || true
-  # `on run argv` form (same as open_resume_window below and
-  # compact-advisor.sh): title/body are passed as argv items instead of being
-  # interpolated into the AppleScript source. A body containing a literal `"`
-  # (e.g. the auto-resume command in msg_blocked) would otherwise terminate
-  # the AppleScript string literal early, making osascript exit non-zero —
+  # `on run argv` form (same as compact-advisor.sh): title/body are passed as
+  # argv items instead of being interpolated into the AppleScript source. A
+  # body containing a literal `"` would otherwise terminate the AppleScript
+  # string literal early, making osascript exit non-zero —
   # swallowed by `|| true`, so the notification (and every other message
   # batched into the same $2) silently never reached the screen.
   osascript -e 'on run argv' \
@@ -298,90 +236,12 @@ notify_mac() { # $1 title, $2 body
     -e 'end run' -- "$1" "$2" >/dev/null 2>&1 || true
 }
 
-# Opens a NEW terminal window (never touches an existing one) and starts the
-# waiting worker in it. Only used when the user opted in at install time.
-open_resume_window() {
-  local cmd="$1"
-  if pgrep -x iTerm2 >/dev/null 2>&1; then
-    osascript -e 'on run argv' \
-      -e 'tell application "iTerm2" to tell (create window with default profile) to tell current session to write text (item 1 of argv)' \
-      -e 'end run' -- "$cmd" >/dev/null 2>&1 || true
-  else
-    osascript -e 'on run argv' \
-      -e 'tell application "Terminal" to do script (item 1 of argv)' \
-      -e 'tell application "Terminal" to activate' \
-      -e 'end run' -- "$cmd" >/dev/null 2>&1 || true
-  fi
-}
-
 # Converts an ISO8601 UTC timestamp (as returned in resets_at) to epoch
-# seconds; empty output on a parse failure. Shared by the window-rollover
-# check below and arm_resume()'s once-per-window guard, both of which must
-# compare two resets_at values with tolerance rather than as exact strings —
+# seconds; empty output on a parse failure. The window-rollover check below
+# compares two resets_at values with tolerance rather than as exact strings —
 # the API recomputes resets_at on every request with ±1s jitter.
 to_epoch() { # $1 = ISO8601 UTC timestamp
   TZ=UTC date -jf "%Y-%m-%dT%H:%M:%S" "${1%%.*}" "+%s" 2>/dev/null
-}
-
-# Marks the recorded session as "waiting for a reset" and tells the user how
-# to continue it. Fires at most once per limit window (guarded by
-# .notified_for, compared against resets_at with the same 120s jitter
-# tolerance the window-rollover check below uses — an exact string compare
-# would re-fire on every cron tick, since resets_at jitters by ~1s between
-# requests). Requires a recently active session — an hours-old session id is
-# not something the user still wants resumed.
-arm_resume() { # $1 = resets_at of the session limit
-  local resets="$1" sid cwd seen_at now age notified worker lock pid
-  local e_notified e_resets w_diff
-  worker="$DIR/auto-resume.sh"
-  [ -f "$worker" ] || return 0
-  # A pre-0.4.0 install has no options file at all — keep the old
-  # file-presence-only gate for it. Once .limit-alerts-options exists (every
-  # install/re-install since), honour AUTO_RESUME explicitly rather than
-  # trusting $worker's presence alone — belt-and-braces alongside install.sh
-  # actually deleting $worker on --no-auto-resume.
-  if [ -f "$DIR/.limit-alerts-options" ]; then
-    grep -q '^AUTO_RESUME=1$' "$DIR/.limit-alerts-options" 2>/dev/null || return 0
-  fi
-  [ -f "$RESUME_STATE" ] || return 0
-  # Explicit up-front parse check, mirroring record_session()'s self-heal
-  # validation: a corrupt/unreadable state file means there is nothing safe
-  # to arm, and bailing here (before any read or write) keeps this function
-  # from ever being the thing that turns a bad file into a worse one.
-  "$JQ" -e . "$RESUME_STATE" >/dev/null 2>&1 || return 0
-  sid=$("$JQ" -r '.session_id // ""' "$RESUME_STATE" 2>/dev/null) || return 0
-  [ -n "$sid" ] || return 0
-  cwd=$("$JQ" -r '.cwd // ""' "$RESUME_STATE" 2>/dev/null) || cwd=""
-  [ -n "$cwd" ] && [ -d "$cwd" ] || return 0
-  seen_at=$("$JQ" -r '.seen_at // 0' "$RESUME_STATE" 2>/dev/null) || return 0
-  now=$(date +%s)
-  age=$(( now - seen_at ))
-  [ "$age" -lt "$SESSION_TTL" ] || return 0
-  notified=$("$JQ" -r '.notified_for // ""' "$RESUME_STATE" 2>/dev/null) || notified=""
-  if [ -n "$notified" ]; then
-    e_notified=$(to_epoch "$notified") || e_notified=0
-    e_resets=$(to_epoch "$resets") || e_resets=0
-    w_diff=$(( e_resets - e_notified )); [ "$w_diff" -lt 0 ] && w_diff=$(( -w_diff ))
-    [ "$w_diff" -le 120 ] && return 0
-  fi
-
-  local state
-  state=$("$JQ" --arg r "$resets" '.armed = true | .resets_at = $r | .notified_for = $r' \
-    "$RESUME_STATE" 2>/dev/null) || return 0
-  printf '%s\n' "$state" > "$RESUME_STATE.tmp" 2>/dev/null && mv "$RESUME_STATE.tmp" "$RESUME_STATE" || return 0
-
-  local cmd="bash \"\$HOME/.claude/scripts/auto-resume.sh\""
-  MESSAGES+=("$(msg_blocked "$(to_local "$resets" "+%H:%M")" "$cmd")")
-  printf '%s' "$cmd" | pbcopy >/dev/null 2>&1 || true
-
-  # autostart: opt-in, and never while a worker for this session is alive
-  grep -q '^AUTO_RESUME_AUTOSTART=1$' "$DIR/.limit-alerts-options" 2>/dev/null || return 0
-  lock="$DIR/auto-resume-$sid.lock"
-  if [ -f "$lock" ]; then
-    pid=$(cat "$lock" 2>/dev/null) || pid=""
-    [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null && return 0
-  fi
-  open_resume_window "bash \"$worker\""
 }
 
 to_local() { # $1 = ISO8601 UTC timestamp, $2 = output format
@@ -453,11 +313,6 @@ while IFS='|' read -r kind percent resets scope; do
   elif [ "$pct" -ge "$WARN" ] && [ "$notified" -lt "$WARN" ]; then
     MESSAGES+=("$(msg_warn "$label" "$pct" "$(to_local "$resets" "+%H:%M")")")
     notified=$WARN
-  fi
-
-  # blocked session: the 5h window is effectively spent
-  if [ "$kind" = "session" ] && [ "$pct" -ge "$BLOCK_PCT" ]; then
-    arm_resume "$resets" || true
   fi
 
   NEW_STATE=$(echo "$NEW_STATE" | "$JQ" --arg k "$key" --argjson p "$pct" --arg r "$resets" --argjson n "$notified" \

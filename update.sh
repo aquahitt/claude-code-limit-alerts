@@ -56,10 +56,8 @@ INSTALLED_VERSION="unknown"
 # файла, новые фичи считаются выключенными — update.sh не включает то,
 # чего пользователь не ставил.
 OPTIONS_FILE="$SCRIPTS_DIR/.limit-alerts-options"
-OPT_AUTO_RESUME=0
 OPT_COMPACT_ADVISOR=0
 if [ -f "$OPTIONS_FILE" ]; then
-  if grep -q '^AUTO_RESUME=1$' "$OPTIONS_FILE"; then OPT_AUTO_RESUME=1; fi
   if grep -q '^COMPACT_ADVISOR=1$' "$OPTIONS_FILE"; then OPT_COMPACT_ADVISOR=1; fi
 fi
 
@@ -90,8 +88,21 @@ echo "==> Обновление: $INSTALLED_VERSION -> $REPO_VERSION"
 [ "$DRY_RUN" = "1" ] && echo "    (--dry-run: изменения не применяются)"
 
 UPDATE_FILES="usage-monitor.sh statusline-with-limits.sh notify-attention.sh"
-if [ "$OPT_AUTO_RESUME" = "1" ]; then UPDATE_FILES="$UPDATE_FILES auto-resume.sh"; fi
 if [ "$OPT_COMPACT_ADVISOR" = "1" ]; then UPDATE_FILES="$UPDATE_FILES compact-advisor.sh"; fi
+
+# Остатки от <= 0.4.0: авто-продолжение убрано, его делает сам Claude Code
+# («Continue automatically at usage limit» в /config). Файлы удаляются, иначе
+# рядом с обновлёнными скриптами останется рабочий auto-resume.sh поверх
+# состояния, которое больше никто не пишет.
+if [ -f "$SCRIPTS_DIR/auto-resume.sh" ] || [ -f "$SCRIPTS_DIR/auto-resume-state.json" ]; then
+  if [ "$DRY_RUN" = "1" ]; then
+    echo "    would remove: auto-resume.sh и его состояние (фича удалена в 0.5.0)"
+  else
+    rm -f "$SCRIPTS_DIR/auto-resume.sh" "$SCRIPTS_DIR/auto-resume-state.json"
+    rm -f "$SCRIPTS_DIR"/auto-resume-*.lock
+    echo "    removed: auto-resume.sh — теперь это умеет сам Claude Code (/config)"
+  fi
+fi
 
 # shellcheck disable=SC2086  # deliberate word splitting over a space-separated list
 for f in $UPDATE_FILES; do

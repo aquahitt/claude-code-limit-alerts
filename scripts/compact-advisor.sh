@@ -112,9 +112,8 @@ cutoff=$(( now - 604800 ))
 new_state=$(printf '%s' "$current" | "$JQ" --arg s "$sid" --argjson st "$step" --argjson n "$now" --argjson c "$cutoff" '
     with_entries(select((.value.at // 0) > $c)) | .[$s] = {step: $st, at: $n}
   ' 2>/dev/null) || new_state=""
-# Atomic write, matching record_session()'s tmp+mv pattern in
-# usage-monitor.sh — an interrupted write never leaves $STATE half-written
-# or corrupt.
+# Atomic write, matching the tmp+mv pattern in usage-monitor.sh — an
+# interrupted write never leaves $STATE half-written or corrupt.
 if [ -n "$new_state" ]; then
   printf '%s\n' "$new_state" > "$STATE.tmp" 2>/dev/null && mv "$STATE.tmp" "$STATE"
 fi

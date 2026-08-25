@@ -66,23 +66,16 @@ Week (Fable)           4%  resets: 17.07 10:00
 
 Details in [docs/how-it-works.md](docs/how-it-works.md).
 
-## Auto-resume, the compact signal and the model in the statusline
+## The compact signal and the model in the statusline
 
-**Auto-resume after a limit reset.** When the 5h limit is exhausted, the
-monitor remembers the current session, shows a notification with the reset
-time, and copies the resume command to the clipboard. The `auto-resume.sh`
-worker waits out the reset, re-verifies the real limits (a weekly limit
-routinely outlives the 5h one) and continues the session interactively — in
-the terminal you started it from, with permission prompts working normally.
-
-```bash
-bash ~/.claude/scripts/auto-resume.sh            # continue the last session
-bash ~/.claude/scripts/auto-resume.sh <id> --prompt "finish the tests"
-```
-
-With `./install.sh --auto-resume-autostart` the monitor opens a **new**
-terminal window and starts the worker there. It never types into an existing
-window.
+**Continuing after a limit reset is Claude Code's own job.** `/config` has a
+"Continue automatically at usage limit" toggle (`autoContinueAtUsageLimit` in
+`~/.claude/settings.json`): the session waits out the reset and carries on by
+itself — no exit, no second terminal, no `--resume`. Up to 0.4.0 this project
+did the same thing from the outside via `auto-resume.sh`; 0.5.0 removes it,
+because an external worker cannot do it better and, running alongside the
+built-in one, would resume a single conversation twice. `install.sh` and
+`update.sh` clean up the files left behind by earlier versions.
 
 **The `/compact` signal.** A hook cannot run `/compact` — the hook output
 schema has no compaction verb. So `compact-advisor.sh` sends a signal at the
@@ -123,8 +116,7 @@ prefix exists precisely because a real model name now shares the line. Do not
 confuse it with `adv Fable`: the first is how much of that model's weekly quota
 is left, the second is what you are consulting.
 
-Turn any of it off: `./install.sh --no-auto-resume`,
-`./install.sh --no-compact-advisor`, `./install.sh --no-statusline-model`,
+Turn any of it off: `./install.sh --no-compact-advisor`, `./install.sh --no-statusline-model`,
 `./install.sh --no-subagent-model`.
 
 ## Installation
@@ -146,8 +138,6 @@ Installer flags:
 | `--no-launchd` | skip the background agent (hooks only) |
 | `--no-attention` | skip "needs your attention" notifications |
 | `--lang en` | English notifications (default is Russian) |
-| `--no-auto-resume` | skip auto-resume after a limit reset |
-| `--auto-resume-autostart` | when a limit blocks the session, open a new terminal window with the waiting worker automatically |
 | `--no-compact-advisor` | skip the `/compact` signal |
 | `--auto-compact-window <tokens>` | move Claude Code's own auto-compact threshold (100000–1000000); affects every session |
 | `--no-statusline-model` | statusline shows limits only — no model / effort / context / subagent segment |
@@ -183,10 +173,6 @@ the defaults at the top of `usage-monitor.sh`):
 | `UM_RESET_MIN` | `50` | minimum usage for a window reset to be announced |
 | `UM_CACHE_TTL` | `60` | API response cache lifetime, seconds |
 | `UM_LANG` | `ru` | message language: `ru` or `en` |
-| `UM_BLOCK_PCT` | `99` | percentage at which the session counts as limit-blocked |
-| `UM_SESSION_TTL` | `1800` | how long (seconds) a session stays "active" and worth resuming |
-| `UM_RESUME_PROMPT` | see `auto-resume.sh` | first message sent to the resumed session |
-| `UM_RESUME_MAX_WAIT` | `28800` | seconds to keep waiting past `resets_at` while limits are still exhausted |
 | `UM_COMPACT_WARN` | `70` | `/compact` signal threshold, % of context |
 | `UM_CONTEXT_WINDOW` | `200000` | context window used for the percentage (overridden by `autoCompactWindow` in `settings.json`) |
 | `UM_STATUSLINE_MODEL` | `1` | show the model segment in the statusline |

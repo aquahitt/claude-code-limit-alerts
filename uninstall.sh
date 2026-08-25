@@ -51,6 +51,9 @@ if [ -n "$JQ" ] && [ -f "$SETTINGS" ]; then
 fi
 
 echo "==> Removing scripts and state"
+# auto-resume.sh, auto-resume-state.json and the lock files below belong to a
+# feature removed in 0.5.0 — kept in this list because installs made with
+# <= 0.4.0 may still have them lying around.
 rm -f "$SCRIPTS_DIR/usage-monitor.sh" \
       "$SCRIPTS_DIR/statusline-with-limits.sh" \
       "$SCRIPTS_DIR/notify-attention.sh" \

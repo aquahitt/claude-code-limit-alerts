@@ -21,11 +21,6 @@
 #                     from HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY, case-
 #                     insensitive, in the current shell); "" disables
 #                     passthrough entirely
-#   --no-auto-resume  skip auto-resume.sh (continuing a session after a
-#                     limit reset)
-#   --auto-resume-autostart
-#                     when a limit blocks the session, open a NEW terminal
-#                     window and start the waiting worker in it automatically
 #   --no-compact-advisor
 #                     skip compact-advisor.sh (the /compact signal)
 #   --no-statusline-model
@@ -49,8 +44,6 @@ fi
 WITH_STATUSLINE=1
 WITH_LAUNCHD=1
 WITH_ATTENTION=1
-WITH_AUTO_RESUME=1
-AUTO_RESUME_AUTOSTART=0
 WITH_COMPACT_ADVISOR=1
 WITH_STATUSLINE_MODEL=1
 WITH_SUBAGENT_MODEL=1
@@ -63,8 +56,6 @@ while [ $# -gt 0 ]; do
     --no-statusline) WITH_STATUSLINE=0 ;;
     --no-launchd)    WITH_LAUNCHD=0 ;;
     --no-attention)  WITH_ATTENTION=0 ;;
-    --no-auto-resume) WITH_AUTO_RESUME=0 ;;
-    --auto-resume-autostart) AUTO_RESUME_AUTOSTART=1 ;;
     --no-compact-advisor) WITH_COMPACT_ADVISOR=0 ;;
     --no-statusline-model) WITH_STATUSLINE_MODEL=0 ;;
     --no-subagent-model) WITH_SUBAGENT_MODEL=0 ;;
@@ -94,11 +85,6 @@ if [ -n "$AUTO_COMPACT_WINDOW" ]; then
   fi
 fi
 
-if [ "$AUTO_RESUME_AUTOSTART" = "1" ] && [ "$WITH_AUTO_RESUME" = "0" ]; then
-  echo "--auto-resume-autostart cannot be combined with --no-auto-resume" >&2
-  exit 1
-fi
-
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$REPO_DIR/lib/hooks.sh"
 source "$REPO_DIR/lib/launchd.sh"
@@ -119,18 +105,6 @@ if [ "$WITH_ATTENTION" = "1" ]; then
   cp "$REPO_DIR/scripts/notify-attention.sh" "$SCRIPTS_DIR/"
   chmod +x "$SCRIPTS_DIR/notify-attention.sh"
 fi
-if [ "$WITH_AUTO_RESUME" = "1" ]; then
-  cp "$REPO_DIR/scripts/auto-resume.sh" "$SCRIPTS_DIR/"
-  chmod +x "$SCRIPTS_DIR/auto-resume.sh"
-else
-  # A re-install with --no-auto-resume must actually remove a script left
-  # over from an earlier install — otherwise arm_resume's [ -f "$worker" ]
-  # gate stays satisfied and the user keeps getting what they opted out of.
-  # auto-resume.sh registers no Claude Code hook of its own, so no hook
-  # cleanup is needed here (see arm_resume's own AUTO_RESUME gate for the
-  # belt-and-braces check).
-  rm -f "$SCRIPTS_DIR/auto-resume.sh"
-fi
 if [ "$WITH_COMPACT_ADVISOR" = "1" ]; then
   cp "$REPO_DIR/scripts/compact-advisor.sh" "$SCRIPTS_DIR/"
   chmod +x "$SCRIPTS_DIR/compact-advisor.sh"
@@ -138,11 +112,20 @@ else
   rm -f "$SCRIPTS_DIR/compact-advisor.sh"
 fi
 
+# Leftovers from <= 0.4.0, which shipped an auto-resume worker. Claude Code
+# now waits out a limit and continues the session on its own ("Continue
+# automatically at usage limit" in /config), so the feature is gone — but its
+# files would otherwise sit in ~/.claude/scripts forever, and a stale
+# auto-resume.sh is still runnable by hand against a state file nothing
+# maintains any more.
+rm -f "$SCRIPTS_DIR/auto-resume.sh" "$SCRIPTS_DIR/auto-resume-state.json"
+rm -f "$SCRIPTS_DIR"/auto-resume-*.lock
+
 cp "$REPO_DIR/VERSION" "$SCRIPTS_DIR/.limit-alerts-version"
 
 # persist language choice by changing the env default (only if not ru)
 if [ "$LANG_UM" != "ru" ]; then
-  for f in usage-monitor.sh statusline-with-limits.sh notify-attention.sh auto-resume.sh compact-advisor.sh; do
+  for f in usage-monitor.sh statusline-with-limits.sh notify-attention.sh compact-advisor.sh; do
     [ -f "$SCRIPTS_DIR/$f" ] && sed -i '' "s/\${UM_LANG:-ru}/\${UM_LANG:-$LANG_UM}/" "$SCRIPTS_DIR/$f"
   done
 fi
@@ -205,8 +188,6 @@ fi
 # a not-yet-installed one — file presence says nothing about autostart.
 cat > "$SCRIPTS_DIR/.limit-alerts-options" <<EOF
 LANG=$LANG_UM
-AUTO_RESUME=$WITH_AUTO_RESUME
-AUTO_RESUME_AUTOSTART=$AUTO_RESUME_AUTOSTART
 COMPACT_ADVISOR=$WITH_COMPACT_ADVISOR
 AUTO_COMPACT_WINDOW_SET=$AUTO_COMPACT_WINDOW_SET
 STATUSLINE_MODEL=$WITH_STATUSLINE_MODEL

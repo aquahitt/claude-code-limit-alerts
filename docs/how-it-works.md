@@ -111,32 +111,23 @@ On every check, for each limit:
 
 Multiple messages from one check are combined into a single notification.
 
-## Auto-resume after a limit reset / Авто-продолжение сессии
+## Limit reset: Claude Code does it itself / Сброс лимита
 
-`usage-monitor.sh hook` reads the hook event JSON on stdin and records the
-active session (`session_id`, `cwd`, `transcript_path`) in
-`auto-resume-state.json`. Hook stdin is used rather than "the newest
-transcript under `~/.claude/projects`", which just as often points at a
-subagent or another window.
+A usage limit does not end the session — the turn is aborted (the CLI fires
+`StopFailure`, not `Stop`) and the process stays alive at the prompt. Claude
+Code 2.1+ can then wait out the reset and continue on its own: the "Continue
+automatically at usage limit" toggle in `/config`, stored as
+`autoContinueAtUsageLimit` in `~/.claude/settings.json`.
 
-When the `session` limit reaches `UM_BLOCK_PCT` (default 99) and that recorded
-session is younger than `UM_SESSION_TTL` (default 1800s), the monitor arms the
-state, emits a 🚫 notification with the reset time, and copies the resume
-command to the clipboard. This fires at most once per limit window.
+Versions up to 0.4.0 of this project did the same from the outside
+(`auto-resume.sh` plus a recorded-session state file). That is removed in
+0.5.0: an external worker cannot beat the built-in one — it needs the session
+to be exited first, and running alongside it would resume a single
+conversation twice, in two terminals. `install.sh` and `update.sh` delete the
+leftover `auto-resume.sh`, `auto-resume-state.json` and lock files.
 
-`auto-resume.sh` is the waiting worker. It sleeps until `resets_at`, then —
-crucially — re-checks the *actual* limits with `UM_CACHE_TTL=0
-usage-monitor.sh limits` instead of trusting the clock: a weekly limit
-routinely outlives a 5h window, and resuming into a still-blocked account
-would fail immediately. Once the `session` limit is below 95% and no other
-limit is at 100%, it `exec`s `claude --resume <id> "<prompt>"` in the
-session's original directory. Because this is an interactive `claude` (not
-`-p`), the session continues in a terminal you can see and permission prompts
-work normally. A pid lock file prevents two workers waiting on one session.
-
-With `--auto-resume-autostart` the monitor opens a **new** terminal window
-(iTerm2 if running, otherwise Terminal.app) and starts the worker there
-automatically. It never types into an existing window.
+The monitor still warns at `UM_WARN`/`UM_CRIT` before a limit runs out, which
+is what gives you the chance to wrap up or switch models.
 
 ## Compact advisor / Подсказка о `/compact`
 
@@ -227,12 +218,10 @@ Turn it off with `install.sh --no-statusline-model` (whole segment) or
 | `~/.claude/scripts/usage-monitor.sh` | monitor (hook / cron / status) |
 | `~/.claude/scripts/statusline-with-limits.sh` | statusline wrapper |
 | `~/.claude/scripts/notify-attention.sh` | attention notifications (banner + sound) |
-| `~/.claude/scripts/auto-resume.sh` | waiting worker: resumes a session after a limit reset |
 | `~/.claude/scripts/compact-advisor.sh` | Stop hook: `/compact` signal |
 | `~/.claude/scripts/statusline-base.cmd` | preserved previous statusline command (optional) |
 | `~/.claude/scripts/usage-monitor-cache.json` | cached API response |
 | `~/.claude/scripts/usage-monitor-state.json` | notification state |
-| `~/.claude/scripts/auto-resume-state.json` | last active session + resume plan (`resets_at`, `notified_for`); `armed` is written when the monitor arms but nothing currently reads it back |
 | `~/.claude/scripts/compact-advisor-state.json` | compact-signal anti-spam state |
 | `~/.claude/scripts/.limit-alerts-options` | options chosen at install time |
 | `~/Library/LaunchAgents/com.claude.usage-monitor.plist` | background agent |
