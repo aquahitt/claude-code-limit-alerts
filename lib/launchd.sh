@@ -17,8 +17,15 @@ xml_escape() {
 
 # $1 = путь к шаблону, $2 = путь для записи, $3 = explicit_proxy
 # ("" | URL | "__DISABLE__"), $4 = путь к уже установленному plist (можно "").
+# $5..$7 — label, путь к исполняемому скрипту и файл ошибок. Необязательные:
+# без них подставляются значения классической установки, поэтому install.sh и
+# update.sh, вызывающие функцию четырьмя аргументами, не меняются. Плагин
+# передаёт все семь и получает агента под собственным label.
 generate_plist() {
   local template="$1" out="$2" explicit="${3:-}" existing="${4:-}"
+  local label="${5:-com.claude.usage-monitor}"
+  local script="${6:-$HOME/.claude/scripts/usage-monitor.sh}"
+  local errlog="${7:-/tmp/claude-usage-monitor.err}"
   local existing_json="{}"
   if [ -n "$existing" ] && [ -f "$existing" ]; then
     existing_json=$(plutil -convert json -o - "$existing" 2>/dev/null) || existing_json="{}"
@@ -61,7 +68,13 @@ ${env_lines}    </dict>
         [ -n "$env_block" ] && printf '%s' "$env_block" >> "$out"
         ;;
       *)
-        printf '%s\n' "${line//__HOME__/$HOME}" >> "$out"
+        # __HOME__ is no longer used by the shipped template, but an older
+        # plist regenerated from a stale copy would otherwise keep the literal.
+        line="${line//__HOME__/$HOME}"
+        line="${line//__LABEL__/$label}"
+        line="${line//__SCRIPT__/$script}"
+        line="${line//__ERRLOG__/$errlog}"
+        printf '%s\n' "$line" >> "$out"
         ;;
     esac
   done < "$template"
