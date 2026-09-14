@@ -241,3 +241,37 @@ if ! apply_launchd; then
     note "limit-alerts: не удалось зарегистрировать фоновый агент. Лимиты по-прежнему проверяются на каждом ходе."
   fi
 fi
+
+# ----------------------------------------------- double-install warning
+
+# Said once per data directory. Both installations register Stop and
+# SessionStart hooks, and they keep separate anti-spam state, so every warning
+# would arrive twice. The plugin never edits settings.json to fix this — that
+# file belongs to the user; it only points at uninstall.sh.
+warn_double_install() {
+  local state="$DATA/.bootstrap-state.json" jq_bin updated
+  jq_bin="$(command -v jq || echo /opt/homebrew/bin/jq)"
+  [ -x "$jq_bin" ] || return 0
+  classic_install_detected || return 0
+  if [ -f "$state" ] && \
+     "$jq_bin" -e '.warned_double_install == true' "$state" >/dev/null 2>&1; then
+    return 0
+  fi
+
+  if [ "$LANG_UM" = "en" ]; then
+    note "limit-alerts: a classic install.sh installation is active alongside the plugin — hooks fire twice and notifications will be duplicated. Run uninstall.sh from the repository to keep only the plugin."
+  else
+    note "limit-alerts: рядом с плагином активна классическая установка install.sh — хуки срабатывают дважды, уведомления будут дублироваться. Запустите uninstall.sh из репозитория, чтобы остался только плагин."
+  fi
+
+  if [ -f "$state" ]; then
+    updated=$("$jq_bin" '.warned_double_install = true' "$state" 2>/dev/null) \
+      || updated='{"warned_double_install":true}'
+  else
+    updated='{"warned_double_install":true}'
+  fi
+  printf '%s\n' "$updated" > "$state"
+  return 0
+}
+
+warn_double_install || true
