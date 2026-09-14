@@ -174,3 +174,70 @@ apply_statusline() {
 }
 
 apply_statusline || true
+
+# ----------------------------------------------------------------- launchd
+
+PLUGIN_LABEL="com.claude.usage-monitor.plugin"
+PLUGIN_PLIST="$HOME/Library/LaunchAgents/$PLUGIN_LABEL.plist"
+
+# UM_NO_LAUNCHCTL=1 means "do not touch launchd at all": the plist is still
+# generated and removed, but nothing is loaded, unloaded or probed. launchctl
+# is per-user and ignores HOME, so this is what lets the plist logic be
+# verified in a sandboxed HOME without registering a real agent.
+apply_launchd() {
+  local want="${CLAUDE_PLUGIN_OPTION_LAUNCHD:-false}" sandboxed="${UM_NO_LAUNCHCTL:-0}"
+
+  if [ "$want" != "true" ]; then
+    [ -f "$PLUGIN_PLIST" ] || return 0
+    [ "$sandboxed" = "1" ] || launchctl bootout "gui/$(id -u)/$PLUGIN_LABEL" 2>/dev/null || true
+    rm -f "$PLUGIN_PLIST"
+    return 0
+  fi
+
+  [ -x "$BIN/cron.sh" ] || return 0
+
+  # The classic agent uses the label com.claude.usage-monitor and its own state
+  # directory. Two cron jobs with two anti-spam state files would notify twice
+  # for every window reset, so refuse rather than double up.
+  local classic_running=1
+  if [ "$sandboxed" != "1" ]; then
+    launchctl print "gui/$(id -u)/com.claude.usage-monitor" >/dev/null 2>&1 || classic_running=0
+  else
+    classic_running=0
+  fi
+  if classic_install_detected || [ "$classic_running" = "1" ]; then
+    if [ "$LANG_UM" = "en" ]; then
+      note "limit-alerts: the install.sh background agent is already running, the plugin did not start a second one. Run uninstall.sh to switch to the plugin."
+    else
+      note "limit-alerts: фоновый агент от install.sh уже работает, плагин не стал запускать второй. Запустите uninstall.sh, чтобы перейти на плагин."
+    fi
+    return 0
+  fi
+
+  # shellcheck source=lib/hooks.sh
+  . "$ROOT/lib/hooks.sh" || return 1
+  resolve_jq || return 1
+  # shellcheck source=lib/launchd.sh
+  . "$ROOT/lib/launchd.sh" || return 1
+
+  mkdir -p "$HOME/Library/LaunchAgents" || return 1
+  local existing=""
+  [ -f "$PLUGIN_PLIST" ] && existing="$PLUGIN_PLIST"
+  generate_plist "$ROOT/launchd/com.claude.usage-monitor.plist.template" \
+    "$PLUGIN_PLIST" "" "$existing" \
+    "$PLUGIN_LABEL" "$BIN/cron.sh" "/tmp/claude-usage-monitor-plugin.err" || return 1
+
+  if [ "$sandboxed" != "1" ]; then
+    launchctl bootout "gui/$(id -u)/$PLUGIN_LABEL" 2>/dev/null || true
+    launchctl bootstrap "gui/$(id -u)" "$PLUGIN_PLIST" 2>/dev/null || return 1
+  fi
+  return 0
+}
+
+if ! apply_launchd; then
+  if [ "$LANG_UM" = "en" ]; then
+    note "limit-alerts: could not register the background agent. Limits are still checked on every turn."
+  else
+    note "limit-alerts: не удалось зарегистрировать фоновый агент. Лимиты по-прежнему проверяются на каждом ходе."
+  fi
+fi
