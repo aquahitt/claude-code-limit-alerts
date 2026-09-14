@@ -65,7 +65,14 @@ from the same files with no copy.
 - **The one constraint to remember:** `${CLAUDE_PLUGIN_ROOT}` points into a
   version-stamped cache, so any path written outside the plugin (the statusline
   command, the launchd plist) must go through `${CLAUDE_PLUGIN_DATA}/bin/`
-  instead, which the bootstrap re-mirrors on every version change.
+  instead. The bootstrap re-copies those scripts on a version change, but
+  rewrites the generated wrappers on every session start — they carry the
+  resolved options, which change whenever the user edits the configuration.
+- **`statusline` and `launchd` are tri-state**, not boolean: `true` applies,
+  `false` removes, unset is a no-op. The skills run the bootstrap from a plain
+  shell where `CLAUDE_PLUGIN_OPTION_*` is absent, and defaulting to `false`
+  there would destroy the statusline the user just enabled. Options resolve
+  environment-first, then from `pluginConfigs` in `~/.claude/settings.json`.
 - **Never add `CLAUDE_PLUGIN_DATA` to the state-directory chain.** It is
   exported by whichever plugin owns the running hook and leaks into unrelated
   shells; a classic install would silently relocate its state into another
