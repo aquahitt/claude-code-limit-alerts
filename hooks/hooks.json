@@ -1,0 +1,52 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "UM_STATE_DIR=\"${CLAUDE_PLUGIN_DATA}\" bash \"${CLAUDE_PLUGIN_ROOT}/scripts/plugin-bootstrap.sh\"",
+            "timeout": 20
+          },
+          {
+            "type": "command",
+            "command": "UM_STATE_DIR=\"${CLAUDE_PLUGIN_DATA}\" bash \"${CLAUDE_PLUGIN_ROOT}/scripts/usage-monitor.sh\" hook",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "UM_STATE_DIR=\"${CLAUDE_PLUGIN_DATA}\" bash \"${CLAUDE_PLUGIN_ROOT}/scripts/usage-monitor.sh\" hook",
+            "timeout": 20
+          },
+          {
+            "type": "command",
+            "command": "UM_STATE_DIR=\"${CLAUDE_PLUGIN_DATA}\" bash \"${CLAUDE_PLUGIN_ROOT}/scripts/notify-attention.sh\" stop",
+            "async": true
+          },
+          {
+            "type": "command",
+            "command": "UM_STATE_DIR=\"${CLAUDE_PLUGIN_DATA}\" bash \"${CLAUDE_PLUGIN_ROOT}/scripts/compact-advisor.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "UM_STATE_DIR=\"${CLAUDE_PLUGIN_DATA}\" bash \"${CLAUDE_PLUGIN_ROOT}/scripts/notify-attention.sh\" notification",
+            "async": true
+          }
+        ]
+      }
+    ]
+  }
+}
