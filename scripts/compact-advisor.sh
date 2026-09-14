@@ -24,6 +24,10 @@ set -u
 
 WARN="${UM_COMPACT_WARN:-70}"
 LANG_UM="${UM_LANG:-ru}"
+
+# See notify-attention.sh: a static hook opts itself out here.
+[ "${CLAUDE_PLUGIN_OPTION_COMPACT_ADVISOR:-true}" = "false" ] && exit 0
+[ -n "${CLAUDE_PLUGIN_OPTION_LANG:-}" ] && LANG_UM="${UM_LANG:-$CLAUDE_PLUGIN_OPTION_LANG}"
 # Resolution order: an explicit override, then the directory install.sh
 # creates. In plugin mode hooks.json and the generated wrappers always pass
 # UM_STATE_DIR, so CLAUDE_PLUGIN_DATA is deliberately NOT consulted here: that
