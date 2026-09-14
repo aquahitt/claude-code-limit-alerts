@@ -1,0 +1,19 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "claude-code-limit-alerts",
+  "description": "Usage-limit warnings for Claude Code on macOS.",
+  "owner": {
+    "name": "Alexey Romanovsky",
+    "url": "https://github.com/aquahitt"
+  },
+  "plugins": [
+    {
+      "name": "limit-alerts",
+      "description": "Warns before a Claude subscription usage limit runs out: hook messages, macOS notifications, a limits-aware statusline and a /compact advisor.",
+      "source": "./",
+      "category": "productivity",
+      "license": "MIT",
+      "homepage": "https://github.com/aquahitt/claude-code-limit-alerts"
+    }
+  ]
+}

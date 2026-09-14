@@ -1,0 +1,62 @@
+{
+  "name": "limit-alerts",
+  "displayName": "Claude Code limit alerts",
+  "version": "0.6.0",
+  "description": "Warns before a Claude subscription usage limit runs out: hook messages, macOS notifications, a limits-aware statusline and a /compact advisor.",
+  "author": {
+    "name": "Alexey Romanovsky",
+    "url": "https://github.com/aquahitt"
+  },
+  "homepage": "https://github.com/aquahitt/claude-code-limit-alerts",
+  "repository": "https://github.com/aquahitt/claude-code-limit-alerts",
+  "license": "MIT",
+  "keywords": ["usage", "limits", "notifications", "statusline", "macos"],
+  "userConfig": {
+    "lang": {
+      "type": "string",
+      "title": "Notification language",
+      "description": "ru or en. Applies to hook messages, macOS banners and the statusline.",
+      "default": "ru"
+    },
+    "warn": {
+      "type": "number",
+      "title": "Warning threshold",
+      "description": "Percent of a limit at which the first warning is sent.",
+      "min": 1,
+      "max": 99,
+      "default": 80
+    },
+    "crit": {
+      "type": "number",
+      "title": "Critical threshold",
+      "description": "Percent of a limit at which the critical warning is sent.",
+      "min": 1,
+      "max": 99,
+      "default": 95
+    },
+    "attention": {
+      "type": "boolean",
+      "title": "\"Needs your attention\" notifications",
+      "description": "macOS banner and sound when Claude waits for an answer or finishes a turn.",
+      "default": true
+    },
+    "compact_advisor": {
+      "type": "boolean",
+      "title": "/compact advisor",
+      "description": "Suggests running /compact at a logical breakpoint when the context window fills up.",
+      "default": true
+    },
+    "statusline": {
+      "type": "boolean",
+      "title": "Limits in the statusline",
+      "description": "Writes statusLine into ~/.claude/settings.json, preserving any existing statusline. Off by default because it edits a file outside the plugin.",
+      "default": false
+    },
+    "launchd": {
+      "type": "boolean",
+      "title": "Background agent (launchd)",
+      "description": "Checks limits every 5 minutes so window-reset notifications arrive while Claude Code is closed. Off by default because it registers a system agent.",
+      "default": false
+    }
+  }
+}
