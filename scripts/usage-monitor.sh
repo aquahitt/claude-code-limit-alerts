@@ -31,7 +31,14 @@ RESET_MIN="${UM_RESET_MIN:-50}"
 CACHE_TTL="${UM_CACHE_TTL:-60}"
 LANG_UM="${UM_LANG:-ru}"
 
-DIR="$HOME/.claude/scripts"
+# Resolution order: an explicit override, then the directory install.sh
+# creates. In plugin mode hooks.json and the generated wrappers always pass
+# UM_STATE_DIR, so CLAUDE_PLUGIN_DATA is deliberately NOT consulted here: that
+# variable is exported by whichever plugin owns the current hook, so a classic
+# install running inside a session that has any other plugin enabled would
+# silently relocate its state into that plugin's data directory.
+DIR="${UM_STATE_DIR:-$HOME/.claude/scripts}"
+mkdir -p "$DIR" 2>/dev/null || true
 STATE="$DIR/usage-monitor-state.json"
 CACHE="$DIR/usage-monitor-cache.json"
 

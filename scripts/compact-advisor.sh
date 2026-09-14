@@ -24,7 +24,14 @@ set -u
 
 WARN="${UM_COMPACT_WARN:-70}"
 LANG_UM="${UM_LANG:-ru}"
-DIR="$HOME/.claude/scripts"
+# Resolution order: an explicit override, then the directory install.sh
+# creates. In plugin mode hooks.json and the generated wrappers always pass
+# UM_STATE_DIR, so CLAUDE_PLUGIN_DATA is deliberately NOT consulted here: that
+# variable is exported by whichever plugin owns the current hook, so a classic
+# install running inside a session that has any other plugin enabled would
+# silently relocate its state into that plugin's data directory.
+DIR="${UM_STATE_DIR:-$HOME/.claude/scripts}"
+mkdir -p "$DIR" 2>/dev/null || true
 STATE="$DIR/compact-advisor-state.json"
 SETTINGS="$HOME/.claude/settings.json"
 
