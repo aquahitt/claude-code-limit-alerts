@@ -61,12 +61,14 @@ RST=$'\033[0m'
 COMPACT_WARN="${UM_COMPACT_WARN:-70}"
 
 BASE=""
-BASE_CMD_FILE="$HOME/.claude/scripts/statusline-base.cmd"
+# See usage-monitor.sh for why CLAUDE_PLUGIN_DATA is not part of this chain.
+UM_DIR="${UM_STATE_DIR:-$HOME/.claude/scripts}"
+BASE_CMD_FILE="$UM_DIR/statusline-base.cmd"
 if [ -f "$BASE_CMD_FILE" ]; then
   BASE=$(echo "$INPUT" | bash -c "$(cat "$BASE_CMD_FILE")" 2>/dev/null)
 fi
 
-CACHE="$HOME/.claude/scripts/usage-monitor-cache.json"
+CACHE="$UM_DIR/usage-monitor-cache.json"
 JQ="$(command -v jq || echo /opt/homebrew/bin/jq)"
 
 if [ "$LANG_UM" = "en" ]; then L5="5h"; L7="7d"; WK="wk"; else L5="5ч"; L7="7д"; WK="нед."; fi
