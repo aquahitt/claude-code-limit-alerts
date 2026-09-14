@@ -211,6 +211,110 @@ line at all.
 Turn it off with `install.sh --no-statusline-model` (whole segment) or
 `--no-subagent-model` (keep the session model, drop `⇢ …`).
 
+## Plugin mode / Режим плагина
+
+The same scripts ship two ways: `install.sh` copies them into
+`~/.claude/scripts`, and the plugin runs them straight from the plugin root
+(`source: "./"` — the repository root *is* the plugin). Only the paths differ.
+
+Те же скрипты, два способа доставки: `install.sh` копирует их в
+`~/.claude/scripts`, плагин запускает прямо из корня плагина (`source: "./"` —
+корень репозитория и есть плагин). Отличаются только пути.
+
+### Three execution contexts / Три контекста исполнения
+
+| Context | Gets `CLAUDE_PLUGIN_*` | Needs a stable path |
+|---|---|---|
+| Hooks (`Stop`, `SessionStart`, `Notification`) | yes | no |
+| Statusline command | no | **yes** |
+| launchd job | no | **yes** |
+
+Hooks are fine: `${CLAUDE_PLUGIN_ROOT}` is re-resolved on every run. The other
+two start outside Claude Code, so they receive no `CLAUDE_PLUGIN_*` variables at
+all — and the plugin cache is version-stamped
+(`~/.claude/plugins/cache/<marketplace>/<plugin>/<version>/`), so any path
+written into `settings.json` or a plist would die at the next plugin update.
+
+Хуки живут спокойно: `${CLAUDE_PLUGIN_ROOT}` вычисляется заново при каждом
+запуске. Два других контекста стартуют вне Claude Code, переменных
+`CLAUDE_PLUGIN_*` не получают вовсе, а кэш плагина версионирован — путь,
+записанный в `settings.json` или в plist, умрёт при первом же обновлении.
+
+### The bridge / Мост
+
+`scripts/plugin-bootstrap.sh` (hook `SessionStart`) mirrors the two scripts
+those surfaces need into the update-stable data directory and generates
+wrappers there. A wrapper is the only place that knows both the data directory
+and the resolved options:
+
+```bash
+export UM_STATE_DIR="$HOME/.claude/plugins/data/limit-alerts-.../"
+export UM_LANG="ru"
+exec bash ".../bin/usage-monitor.sh" "$@"
+```
+
+It re-mirrors whenever `bin/.version` differs from `VERSION` at the plugin root,
+which is what keeps the two out-of-plugin paths correct across updates.
+
+`notify-attention.sh` and `compact-advisor.sh` are deliberately **not**
+mirrored: they only ever run from hooks, where `${CLAUDE_PLUGIN_ROOT}` already
+resolves correctly.
+
+### State directory / Каталог состояния
+
+```
+DIR="${UM_STATE_DIR:-$HOME/.claude/scripts}"
+```
+
+`CLAUDE_PLUGIN_DATA` is **not** in this chain, on purpose. It is exported by
+whichever plugin owns the running hook and leaks into unrelated shells — a
+plain terminal inside a Claude Code session can carry
+`CLAUDE_PLUGIN_DATA=~/.claude/plugins/data/<some other plugin>`. Consulting it
+would make a classic install silently relocate its state into an unrelated
+plugin's data directory. `hooks.json` and both wrappers always pass
+`UM_STATE_DIR` explicitly, so nothing is lost.
+
+`CLAUDE_PLUGIN_DATA` в цепочке нет намеренно: её экспортирует тот плагин, чей
+хук выполняется, и она протекает в посторонние шеллы. Классическая установка в
+сессии с любым другим включённым плагином иначе молча унесла бы состояние в
+чужой каталог.
+
+### Plugin data layout / Раскладка данных плагина
+
+`~/.claude/plugins/data/limit-alerts-claude-code-limit-alerts/`:
+
+| Path | Purpose |
+|---|---|
+| `bin/.version` | version of the mirrored copies |
+| `bin/usage-monitor.sh`, `bin/statusline-with-limits.sh` | mirrored copies |
+| `bin/cron.sh`, `bin/statusline.sh` | generated env wrappers |
+| `usage-monitor-cache.json`, `usage-monitor-state.json` | as in the classic install |
+| `compact-advisor-state.json`, `statusline-base.cmd` | as in the classic install |
+| `.bootstrap-state.json` | one-shot flags (double-install warning) |
+
+### Options / Настройки
+
+`userConfig` values reach hooks as `CLAUDE_PLUGIN_OPTION_<KEY>`; booleans arrive
+as the literal strings `true` / `false`. A `default` declared in the manifest is
+**never materialised into the environment** — with no `pluginConfigs` entry, not
+one of those variables is exported. So every default also lives in bash, and an
+unset variable means "use the script default".
+
+Дефолт из манифеста в окружение не попадает: пока пользователь не открыл диалог
+настройки, ни одной переменной `CLAUDE_PLUGIN_OPTION_*` нет. Поэтому каждый
+дефолт продублирован в bash, а отсутствие переменной означает «взять
+скриптовый».
+
+### Coexistence / Сосуществование
+
+The plugin's launchd agent uses a separate label,
+`com.claude.usage-monitor.plugin`, so it never overwrites the plist
+`install.sh` owns. Its statusline ownership marker is the data directory path,
+distinct from the classic `statusline-with-limits` marker `uninstall.sh` greps
+for. If a classic install is detected, the plugin refuses to touch either
+surface and warns once — two installations would fire every hook twice and keep
+separate anti-spam state, duplicating every notification.
+
 ## Files / Файлы
 
 | Path | Purpose |
@@ -226,8 +330,15 @@ Turn it off with `install.sh --no-statusline-model` (whole segment) or
 | `~/.claude/scripts/.limit-alerts-options` | options chosen at install time |
 | `~/Library/LaunchAgents/com.claude.usage-monitor.plist` | background agent |
 | `/tmp/claude-usage-monitor.err` | agent stderr (normally empty) |
+| `~/Library/LaunchAgents/com.claude.usage-monitor.plugin.plist` | background agent, plugin mode |
+| `/tmp/claude-usage-monitor-plugin.err` | agent stderr, plugin mode |
+| `~/.claude/plugins/data/limit-alerts-*/` | all plugin-mode state (see Plugin mode above) |
 
 ## Claude Code integration / Интеграция
+
+In plugin mode Claude Code registers the hooks itself from `hooks/hooks.json`
+and `~/.claude/settings.json` is not touched at all. В режиме плагина хуки
+регистрирует сам Claude Code, `settings.json` не правится.
 
 `install.sh` merges this into `~/.claude/settings.json` (existing entries are
 preserved):

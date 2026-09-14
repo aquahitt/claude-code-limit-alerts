@@ -58,6 +58,10 @@ Week (Fable)           4%  resets: 17.07 10:00
   UI after each turn and on session start.
 - A **launchd agent** checks limits every 5 minutes in the background — the
   window-reset notification arrives even when Claude Code is closed.
+- **Two ways to run it.** The plugin registers its own hooks and keeps state in
+  its own data directory; `install.sh` copies the scripts into
+  `~/.claude/scripts` and appends hooks to `~/.claude/settings.json`. The
+  monitoring logic is identical in both — they are the same files.
 - The **statusline wrapper** appends percentages to your existing statusline
   (which is preserved and keeps rendering) — data comes from a local cache,
   no network calls on the statusline path.
@@ -124,6 +128,52 @@ Turn any of it off: `./install.sh --no-compact-advisor`, `./install.sh --no-stat
 Requirements: macOS, [jq](https://jqlang.github.io/jq/) (`brew install jq`),
 Claude Code authenticated with a subscription (Pro/Max).
 
+Two ways. The plugin is the primary one; `install.sh` stays for anyone who
+needs `--auto-compact-window` or an install without a marketplace.
+
+### As a plugin (recommended)
+
+```
+/plugin marketplace add aquahitt/claude-code-limit-alerts
+/plugin install limit-alerts@claude-code-limit-alerts
+```
+
+Claude Code registers the hooks itself — `~/.claude/settings.json` is not
+touched. All state lives in the plugin's data directory and survives updates.
+
+Configure it under `/plugin` → limit-alerts → Configure:
+
+| Option | Default | Effect |
+|---|---|---|
+| `lang` | `ru` | notification language (`ru` / `en`) |
+| `warn` | `80` | 🟡 threshold, percent |
+| `crit` | `95` | 🔴 threshold, percent |
+| `attention` | on | "needs your attention" notifications |
+| `compact_advisor` | on | the `/compact` signal |
+| `statusline` | **off** | limit percentages in the statusline |
+| `launchd` | **off** | background agent, checks every 5 minutes |
+
+The last two are off on purpose: they write outside the plugin — into
+`~/.claude/settings.json` and `~/Library/LaunchAgents`. Turn them on in the
+configuration dialog and the change applies at the next session start, or
+immediately via `/limit-alerts:setup`. An existing statusline is not
+overwritten: it is preserved, keeps rendering, and the percentages are
+appended after it.
+
+Plugin skills:
+
+| Skill | Effect |
+|---|---|
+| `/limit-alerts:status` | show current limits |
+| `/limit-alerts:setup` | apply the statusline and agent settings now |
+| `/limit-alerts:uninstall` | remove the statusline and the agent before removing the plugin |
+
+> ⚠️ Do not run the plugin and `install.sh` side by side: hooks fire twice and
+> notifications get duplicated. The plugin detects this and warns once. It also
+> leaves the statusline and the agent completely alone in that case.
+
+### With `install.sh`
+
 ```bash
 git clone https://github.com/aquahitt/claude-code-limit-alerts.git
 cd claude-code-limit-alerts
@@ -147,6 +197,12 @@ Restart Claude Code afterwards (or open `/hooks` once) so the new hooks are
 picked up. A backup of `~/.claude/settings.json` is created before any change.
 
 ## Update
+
+The plugin updates through `/plugin` — Claude Code pulls the new version
+itself. The script mirror in the data directory is rebuilt automatically on the
+first session start after the update.
+
+The classic install:
 
 ```bash
 git pull
@@ -208,6 +264,13 @@ launchctl list | grep com.claude.usage-monitor
 ```
 
 ## Uninstall
+
+The plugin: run `/limit-alerts:uninstall` first, then remove the plugin with
+`/plugin`. The order matters — disabling a plugin does not by itself remove the
+statusline or unload the launchd agent, because those are writes outside the
+plugin.
+
+The classic install:
 
 ```bash
 ./uninstall.sh

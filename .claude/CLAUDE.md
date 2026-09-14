@@ -20,7 +20,9 @@ project lives in shell scripts installed into `~/.claude/`.
   agent (`~/Library/LaunchAgents/com.claude.usage-monitor.plist`).
 - `lib/hooks.sh` — shared hook-registration logic (`add_hook`,
   `register_monitor_hooks`, `register_attention_hooks`), sourced by
-  `install.sh` and `update.sh`; never itself copied into `~/.claude`.
+  `install.sh` and `update.sh`; never copied into `~/.claude/scripts`. It does
+  ship inside the plugin, though — `source: "./"` puts the whole repository,
+  `lib/` included, into the plugin cache.
 - `lib/launchd.sh` — shared launchd plist generation (`generate_plist`,
   `print_proxy_status`), including proxy-env passthrough for corporate
   proxy/VPN setups; sourced by `install.sh` and `update.sh` the same way as
@@ -35,14 +37,46 @@ project lives in shell scripts installed into `~/.claude/`.
   external worker needs the session exited first and, alongside the built-in
   one, resumes one conversation twice. This project warns about limits; it
   does not manage sessions.
-- `launchd/com.claude.usage-monitor.plist.template` — plist template
-  (`__HOME__` substituted via `sed`).
+- `launchd/com.claude.usage-monitor.plist.template` — plist template.
+  `__LABEL__`, `__SCRIPT__`, `__ERRLOG__` (and legacy `__HOME__`) are
+  substituted by `generate_plist`, whose 5th-7th parameters are optional and
+  default to the classic install's values — that is what lets `install.sh` and
+  `update.sh` keep calling it with four arguments.
 - `docs/how-it-works.md` — data source (`/api/oauth/usage` endpoint,
   Keychain), hook logic, and anti-spam rules.
 - `docs/superpowers/plans/`, `docs/superpowers/specs/` — plans and specs left
   behind by the `superpowers:writing-plans` / `superpowers:brainstorming`
   skills. Local working drafts, gitignored — not committed to the
   repository.
+
+### Plugin surface
+
+The repository root **is** the plugin (`source: "./"`), so `scripts/` is reused
+from the same files with no copy.
+
+- `.claude-plugin/plugin.json` — manifest and `userConfig`;
+  `.claude-plugin/marketplace.json` — single-entry catalogue.
+- `hooks/hooks.json` — Stop / SessionStart / Notification. Every command passes
+  `UM_STATE_DIR="${CLAUDE_PLUGIN_DATA}"` explicitly.
+- `skills/{status,setup,uninstall}/SKILL.md` — thin triggers; logic stays in
+  bash. (`.claude/skills/` is a different thing entirely — those are
+  development skills for this repository and are not shipped to plugin users.)
+- `scripts/plugin-bootstrap.sh` — `SessionStart` hook.
+- **The one constraint to remember:** `${CLAUDE_PLUGIN_ROOT}` points into a
+  version-stamped cache, so any path written outside the plugin (the statusline
+  command, the launchd plist) must go through `${CLAUDE_PLUGIN_DATA}/bin/`
+  instead, which the bootstrap re-mirrors on every version change.
+- **Never add `CLAUDE_PLUGIN_DATA` to the state-directory chain.** It is
+  exported by whichever plugin owns the running hook and leaks into unrelated
+  shells; a classic install would silently relocate its state into another
+  plugin's data directory. `UM_STATE_DIR` is the only knob.
+- `userConfig` defaults are never materialised into the environment — an unset
+  `CLAUDE_PLUGIN_OPTION_*` is the normal case, so every default is duplicated in
+  bash. Booleans arrive as the literal strings `true` / `false`.
+- The plugin's launchd label is `com.claude.usage-monitor.plugin`, deliberately
+  distinct from the classic one, and `UM_NO_LAUNCHCTL=1` makes the bootstrap
+  generate the plist without touching launchd (which ignores `HOME`, so this is
+  the only way to verify that path safely).
 
 ## Conventions
 
