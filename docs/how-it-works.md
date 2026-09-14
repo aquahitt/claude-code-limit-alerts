@@ -253,8 +253,19 @@ export UM_LANG="ru"
 exec bash ".../bin/usage-monitor.sh" "$@"
 ```
 
-It re-mirrors whenever `bin/.version` differs from `VERSION` at the plugin root,
-which is what keeps the two out-of-plugin paths correct across updates.
+The two mirrored scripts are re-copied when `bin/.version` differs from
+`VERSION` at the plugin root. The wrappers, by contrast, are rewritten on
+**every session start**: they carry the resolved options, and those change
+whenever the user edits the plugin configuration. Gating them on the version
+would leave the statusline and the background agent on stale language and
+thresholds until the next release.
+
+Options are resolved environment-first, then from
+`pluginConfigs` in `~/.claude/settings.json` — the skills run the bootstrap from
+a plain shell, which receives no `CLAUDE_PLUGIN_OPTION_*` at all. For the two
+settings that write outside the plugin the option is tri-state: `true` applies,
+`false` removes, and unset does nothing, so running the bootstrap from a shell
+can never tear down a statusline the user just enabled.
 
 `notify-attention.sh` and `compact-advisor.sh` are deliberately **not**
 mirrored: they only ever run from hooks, where `${CLAUDE_PLUGIN_ROOT}` already
