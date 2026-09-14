@@ -20,6 +20,12 @@ input=$(cat)
 event="${1:-notification}"
 LANG_UM="${UM_LANG:-ru}"
 
+# Plugin hooks are declared statically and cannot be registered conditionally,
+# so an opted-out feature turns itself off here. Unset means "classic install
+# or never configured" — both of which want the feature on.
+[ "${CLAUDE_PLUGIN_OPTION_ATTENTION:-true}" = "false" ] && exit 0
+[ -n "${CLAUDE_PLUGIN_OPTION_LANG:-}" ] && LANG_UM="${UM_LANG:-$CLAUDE_PLUGIN_OPTION_LANG}"
+
 cwd=$(jq -r '.cwd // empty' <<<"$input" 2>/dev/null)
 cwd=${cwd:-$PWD}
 proj=$(basename "$cwd")

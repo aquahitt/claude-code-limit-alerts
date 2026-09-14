@@ -31,6 +31,15 @@ RESET_MIN="${UM_RESET_MIN:-50}"
 CACHE_TTL="${UM_CACHE_TTL:-60}"
 LANG_UM="${UM_LANG:-ru}"
 
+# Plugin userConfig bridge. An explicit UM_* environment variable always wins;
+# the plugin option is only a fallback. Measured: a userConfig default is never
+# materialised, so an unset CLAUDE_PLUGIN_OPTION_* is the normal case and the
+# script's own default has to carry it. These lines sit AFTER the assignments
+# above on purpose — install.sh rewrites those literals with sed.
+[ -n "${CLAUDE_PLUGIN_OPTION_LANG:-}" ] && LANG_UM="${UM_LANG:-$CLAUDE_PLUGIN_OPTION_LANG}"
+[ -n "${CLAUDE_PLUGIN_OPTION_WARN:-}" ] && WARN="${UM_WARN:-$CLAUDE_PLUGIN_OPTION_WARN}"
+[ -n "${CLAUDE_PLUGIN_OPTION_CRIT:-}" ] && CRIT="${UM_CRIT:-$CLAUDE_PLUGIN_OPTION_CRIT}"
+
 # Resolution order: an explicit override, then the directory install.sh
 # creates. In plugin mode hooks.json and the generated wrappers always pass
 # UM_STATE_DIR, so CLAUDE_PLUGIN_DATA is deliberately NOT consulted here: that
@@ -269,8 +278,16 @@ if [ "$MODE" = "limits" ]; then
 fi
 
 if [ "$MODE" = "status" ]; then
-  if [ -f "$DIR/.limit-alerts-version" ]; then
-    printf 'claude-code-limit-alerts v%s\n' "$(cat "$DIR/.limit-alerts-version")"
+  # install.sh writes .limit-alerts-version into the state directory; in plugin
+  # mode nobody does, and VERSION at the plugin root is the source of truth.
+  VERSION_FILE=""
+  if   [ -f "$DIR/.limit-alerts-version" ]; then
+    VERSION_FILE="$DIR/.limit-alerts-version"
+  elif [ -f "${CLAUDE_PLUGIN_ROOT:-/nonexistent}/VERSION" ]; then
+    VERSION_FILE="$CLAUDE_PLUGIN_ROOT/VERSION"
+  fi
+  if [ -n "$VERSION_FILE" ]; then
+    printf 'claude-code-limit-alerts v%s\n' "$(cat "$VERSION_FILE")"
   fi
   while IFS='|' read -r kind percent resets scope; do
     [ -n "$kind" ] || continue
