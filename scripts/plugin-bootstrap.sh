@@ -92,3 +92,85 @@ if ! mirror; then
     note "limit-alerts: не удалось подготовить $BIN — статусная строка и фоновый агент недоступны."
   fi
 fi
+
+# --------------------------------------------------------- classic install
+
+SETTINGS="$HOME/.claude/settings.json"
+
+# A classic install owns $HOME/.claude/scripts, its own statusline marker and
+# its own launchd label. Writing over any of that from here would orphan state
+# uninstall.sh expects to find, so both opt-in steps below refuse while it is
+# present and the user is told to pick one installation.
+classic_install_detected() {
+  [ -f "$HOME/.claude/scripts/usage-monitor.sh" ] || return 1
+  local jq_bin
+  jq_bin="$(command -v jq || echo /opt/homebrew/bin/jq)"
+  [ -x "$jq_bin" ] && [ -f "$SETTINGS" ] || return 1
+  "$jq_bin" -e '[.hooks // {} | .[]? | .[]? | .hooks[]? | .command // ""]
+                | map(select(contains("usage-monitor.sh"))) | length > 0' \
+    "$SETTINGS" >/dev/null 2>&1
+}
+
+backup_settings() {
+  [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
+  cp "$SETTINGS" "$SETTINGS.bak.limit-alerts-plugin"
+}
+
+# -------------------------------------------------------------- statusline
+
+apply_statusline() {
+  local want="${CLAUDE_PLUGIN_OPTION_STATUSLINE:-false}"
+  local jq_bin cur updated ours=0
+  jq_bin="$(command -v jq || echo /opt/homebrew/bin/jq)"
+  [ -x "$jq_bin" ] || return 0
+  [ -f "$BIN/statusline.sh" ] || return 0
+
+  cur=""
+  [ -f "$SETTINGS" ] && cur=$("$jq_bin" -r '.statusLine.command // ""' "$SETTINGS" 2>/dev/null)
+
+  # Ownership marker is the data directory path. The classic install's marker
+  # is the string "statusline-with-limits", which uninstall.sh greps for; the
+  # two must stay distinct so neither uninstaller touches the other's entry.
+  case "$cur" in *"$BIN/statusline.sh"*) ours=1 ;; esac
+
+  if [ "$want" = "true" ]; then
+    [ "$ours" = "1" ] && return 0
+    if classic_install_detected; then
+      if [ "$LANG_UM" = "en" ]; then
+        note "limit-alerts: a classic install.sh statusline is active, the plugin did not touch it. Run uninstall.sh to switch to the plugin."
+      else
+        note "limit-alerts: активна статусная строка от install.sh, плагин её не трогал. Запустите uninstall.sh, чтобы перейти на плагин."
+      fi
+      return 0
+    fi
+    backup_settings || return 1
+    # Preserve a foreign statusline so the wrapper keeps rendering it, exactly
+    # as install.sh does for the classic path.
+    if [ -n "$cur" ]; then
+      printf '%s\n' "$cur" > "$DATA/statusline-base.cmd"
+    fi
+    updated=$("$jq_bin" --arg cmd "bash \"$BIN/statusline.sh\"" \
+      '.statusLine = {type: "command", command: $cmd, refreshInterval: 60}' "$SETTINGS") || return 1
+    printf '%s\n' "$updated" > "$SETTINGS"
+    if [ "$LANG_UM" = "en" ]; then
+      note "limit-alerts: limits added to the statusline. Restart Claude Code to see them."
+    else
+      note "limit-alerts: лимиты добавлены в статусную строку. Перезапустите Claude Code, чтобы увидеть их."
+    fi
+  else
+    # Only ever remove our own entry.
+    [ "$ours" = "1" ] || return 0
+    backup_settings || return 1
+    if [ -s "$DATA/statusline-base.cmd" ]; then
+      updated=$("$jq_bin" --arg cmd "$(cat "$DATA/statusline-base.cmd")" \
+        '.statusLine = {type: "command", command: $cmd}' "$SETTINGS") || return 1
+    else
+      updated=$("$jq_bin" 'del(.statusLine)' "$SETTINGS") || return 1
+    fi
+    printf '%s\n' "$updated" > "$SETTINGS"
+    rm -f "$DATA/statusline-base.cmd"
+  fi
+  return 0
+}
+
+apply_statusline || true
