@@ -3,11 +3,11 @@
 <plist version="1.0">
 <dict>
     <key>Label</key>
-    <string>com.claude.usage-monitor</string>
+    <string>__LABEL__</string>
     <key>ProgramArguments</key>
     <array>
         <string>/bin/bash</string>
-        <string>__HOME__/.claude/scripts/usage-monitor.sh</string>
+        <string>__SCRIPT__</string>
         <string>cron</string>
     </array>
 __ENV_VARS__
@@ -16,6 +16,6 @@ __ENV_VARS__
     <key>RunAtLoad</key>
     <true/>
     <key>StandardErrorPath</key>
-    <string>/tmp/claude-usage-monitor.err</string>
+    <string>__ERRLOG__</string>
 </dict>
 </plist>
