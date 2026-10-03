@@ -279,6 +279,41 @@ The classic install:
 Unloads the launchd agent, removes the hooks from settings, restores your
 previous statusline, and deletes the scripts.
 
+## Experimental: a status-line mod
+
+`mods/limit-alerts-status/` holds a separate plugin of Claude Code TypeScript
+hooks (a mod). It shows the limits in the plugin status line under the prompt
+and **does not touch** `statusLine` in `~/.claude/settings.json`: no backups,
+no wrappers.
+
+```
+5h 62% · 7d 9% · wk Fable 4%
+```
+
+There are no colors — the line is plain text — so severity is a leading mark:
+`⚠` from the warning threshold, `⛔` from the critical one.
+
+Where the numbers come from, in order:
+
+1. A fresh `usage-monitor-cache.json` (under 15 minutes old) — from
+   `UM_STATE_DIR`, `~/.claude/scripts`, or the `limit-alerts` plugin's data
+   directory.
+2. Otherwise the 5h/7d percentages Claude Code itself gets from API responses.
+   This works even without the monitor, but lacks the model-scoped weekly
+   limit.
+3. Otherwise a stale cache marked with its age: `(2h ago)`.
+
+To run it:
+
+```bash
+claude --plugin-dir mods/limit-alerts-status
+```
+
+Its options (`lang`, `warn`, `crit`, `state_dir`) show up in the config menu.
+The mod is not part of the `limit-alerts` plugin or the marketplace: the mod
+API is still early access and may change between Claude Code versions. If this
+project's statusline is enabled too, the limits show up twice.
+
 ## FAQ
 
 **Notifications don't show up.**
