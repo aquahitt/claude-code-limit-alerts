@@ -1,0 +1,43 @@
+{
+  "name": "limit-alerts-status",
+  "version": "0.1.0",
+  "description": "Prototype: shows claude-code-limit-alerts usage limits as a plugin status line, without touching statusLine in settings.json.",
+  "author": {
+    "name": "Alexey Romanovsky",
+    "url": "https://github.com/aquahitt"
+  },
+  "userConfig": {
+    "lang": {
+      "type": "string",
+      "title": "Language",
+      "description": "ru or en.",
+      "options": [
+        "ru",
+        "en"
+      ],
+      "default": "ru"
+    },
+    "warn": {
+      "type": "number",
+      "title": "Warning threshold",
+      "description": "Percent at which the line gets a warning mark.",
+      "min": 1,
+      "max": 99,
+      "default": 80
+    },
+    "crit": {
+      "type": "number",
+      "title": "Critical threshold",
+      "description": "Percent at which the line gets a critical mark.",
+      "min": 1,
+      "max": 99,
+      "default": 95
+    },
+    "state_dir": {
+      "type": "string",
+      "title": "State directory",
+      "description": "Where usage-monitor-cache.json lives. Empty: UM_STATE_DIR, then ~/.claude/scripts, then the limit-alerts plugin data directory.",
+      "default": ""
+    }
+  }
+}
