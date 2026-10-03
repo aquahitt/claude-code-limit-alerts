@@ -2,6 +2,18 @@
 
 Формат — [Keep a Changelog](https://keepachangelog.com/ru/1.1.0/), версии — [SemVer](https://semver.org/lang/ru/).
 
+## [Unreleased]
+
+### Added
+
+- Экспериментальный mod `mods/limit-alerts-status/` — отдельный плагин на
+  TypeScript-хуках Claude Code. Показывает лимиты в строке статуса плагина
+  (`$.ui.status`), не трогая `statusLine` в `~/.claude/settings.json`. Берёт
+  свежий `usage-monitor-cache.json`, а без него — проценты 5ч/7д, которые
+  Claude Code сам получает из ответов API. В плагин `limit-alerts` и в
+  marketplace не входит: API модов пока в early access. Запуск:
+  `claude --plugin-dir mods/limit-alerts-status`.
+
 ## [0.6.0] - 2026-09-15
 
 ### Added

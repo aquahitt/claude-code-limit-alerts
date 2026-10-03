@@ -3,3 +3,5 @@
 .claude/settings.local.json
 docs/superpowers/
 .superpowers/
+# Engine-generated API typings, laid when a mod is loaded from disk
+mods/*/.claude-plugin/types/
