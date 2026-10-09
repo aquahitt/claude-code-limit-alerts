@@ -11,9 +11,12 @@
 # "wk Fable 4%" is the weekly model-scoped LIMIT, not a running model — hence
 # the prefix, now that a real model name shares the line.
 #
-# Reads percentages from the usage-monitor cache only — no network calls,
-# so the statusline stays fast. The cache is refreshed by the launchd agent
-# and by the usage-monitor hooks.
+# The 5h and 7d percentages come from this statusline's own stdin: Claude Code
+# passes .rate_limits (five_hour / seven_day, from the headers of its last API
+# response), so they are current and cost no request. The usage-monitor cache
+# fills in what stdin lacks — the model-scoped weekly limit, which only the
+# usage endpoint reports, and the first redraws of a session, before any API
+# response. No network calls either way, so the statusline stays fast.
 #
 # If ~/.claude/scripts/statusline-base.cmd exists, its content is executed
 # as the base statusline command (stdin JSON is passed through). Without it
@@ -254,18 +257,34 @@ if [ "$SL_MODEL" = "1" ] && [ -x "$JQ" ]; then
 fi
 
 LIMITS=""
-if [ -f "$CACHE" ] && [ -x "$JQ" ]; then
-  read -r s w f <<< "$("$JQ" -r \
-    '[(.five_hour.utilization // 0), (.seven_day.utilization // 0),
-      ([.limits[]? | select(.kind == "weekly_scoped")][0].percent // -1)] | map(floor) | join(" ")' \
-    "$CACHE" 2>/dev/null)"
-  if [ -n "$s" ]; then
+s=""; w=""; f="-1"; SCOPED_MODEL=""
+if [ -x "$JQ" ]; then
+  # Both windows or neither: one live and one cached number side by side would
+  # silently mix two moments.
+  read -r s w <<< "$(printf '%s' "$INPUT" | "$JQ" -r '
+    [.rate_limits.five_hour.used_percentage, .rate_limits.seven_day.used_percentage]
+    | if all(type == "number") then (map(floor | tostring) | join(" ")) else "" end' 2>/dev/null)"
+  if [ -f "$CACHE" ]; then
+    # The scoped limit is shown only while its window is still open: from a
+    # cache that outlived its reset, the number no longer means anything.
+    IFS=$'\t' read -r cs cw f SCOPED_MODEL <<< "$("$JQ" -r '
+      ([.limits[]? | select(.kind == "weekly_scoped")][0]) as $sc
+      | (($sc.resets_at // "") | sub("\\.[0-9]+"; "") | sub("(\\+00:00|Z)$"; "Z")
+         | (try fromdateiso8601 catch 0)) as $reset
+      | [ (.five_hour.utilization // 0 | floor),
+          (.seven_day.utilization // 0 | floor),
+          (if $sc != null and ($sc.percent | type) == "number" and ($reset == 0 or $reset > now)
+             then ($sc.percent | floor) else -1 end),
+          ($sc.scope.model.display_name // "") ]
+      | map(tostring) | join("\t")' "$CACHE" 2>/dev/null)"
+    if [ -z "$s" ]; then s="${cs:-}"; w="${cw:-}"; fi
+  fi
+  if [ -n "$s" ] && [ -n "$w" ]; then
     LIMITS="${L5} $(colorize "$s") ${DIM}·${RST} ${L7} $(colorize "$w")"
-    # model-scoped weekly limit (-1 = not present in cache, hidden). The WK
+    # model-scoped weekly limit (-1 = absent or expired, hidden). The WK
     # prefix keeps this from reading as "the model currently running".
-    if [ "$f" -ge 0 ] 2>/dev/null; then
-      MODEL=$("$JQ" -r '[.limits[]? | select(.kind == "weekly_scoped")][0].scope.model.display_name // ""' "$CACHE" 2>/dev/null)
-      [ -n "$MODEL" ] && LIMITS="$LIMITS ${DIM}·${RST} ${WK} ${MODEL} $(colorize "$f")"
+    if [ "$f" -ge 0 ] 2>/dev/null && [ -n "$SCOPED_MODEL" ]; then
+      LIMITS="$LIMITS ${DIM}·${RST} ${WK} ${SCOPED_MODEL} $(colorize "$f")"
     fi
   fi
 fi

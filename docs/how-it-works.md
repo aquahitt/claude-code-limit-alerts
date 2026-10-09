@@ -70,17 +70,29 @@ don't happen to have it in their environment.
           systemMessage in UI   macOS notification (osascript)
                     │
                     └── usage-monitor-cache.json ──> statusline-with-limits.sh
+                                                            ▲
+                         Claude Code stdin: rate_limits (5h, 7d) ┘
 ```
 
 - **`usage-monitor.sh`** — the core. Fetches usage, compares against thresholds,
   maintains state, emits notifications.
-- **`statusline-with-limits.sh`** — statusline wrapper. Read-only: renders the
-  cached percentages; never touches the network. If
+- **`statusline-with-limits.sh`** — statusline wrapper. Read-only, never
+  touches the network. The 5h and 7d percentages come from its own stdin:
+  Claude Code passes `rate_limits.five_hour` / `rate_limits.seven_day`
+  (`used_percentage`, `resets_at` in epoch seconds), taken from the headers of
+  its last API response — current, and free. Both windows are taken from
+  stdin or neither, so a live and a cached number never sit side by side. The
+  cache fills in the model-scoped weekly limit (only the usage endpoint
+  reports it; hidden once its window has reset) and the first redraws of a
+  session, before any API response.
+  5ч и 7д statusline берёт из своего stdin (их передаёт Claude Code), кэш — для
+  недельного лимита по модели и начала сессии. If
   `~/.claude/scripts/statusline-base.cmd` exists, its content is executed as the
   base statusline and the limits are appended after a `|` separator.
 - **launchd agent** (`com.claude.usage-monitor`) — runs `usage-monitor.sh cron`
   every 5 minutes. This is what makes reset notifications work while Claude Code
-  is closed, and what keeps the statusline cache fresh between turns.
+  is closed, and what keeps the cache (the statusline's model-scoped weekly
+  limit and its fallback) fresh between turns.
 - **`notify-attention.sh`** — independent of the limit monitor. Hooked to
   `Notification` (Claude waits for a permission/answer) and `Stop` (turn
   finished). Reads the hook event JSON from stdin, resolves the session identity
