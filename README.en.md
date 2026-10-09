@@ -44,10 +44,16 @@ not allowed in Notification Center.
 
 ```
 $ ~/.claude/scripts/usage-monitor.sh status
+claude-code-limit-alerts v0.6.1
 Session (5h)          71%  resets: 16.07 18:00
 Week (all models)      7%  resets: 17.07 10:00
 Week (Fable)           4%  resets: 17.07 10:00
 ```
+
+If live data can't be fetched (for example, the endpoint answers 429),
+`status` shows the last cache marked "⚠ No live data — showing the cache from
+… (N min ago)", and flags windows that have rolled over since with
+"(already reset)". In the plugin, the `limit-alerts:status` skill does the same.
 
 ## How it works
 
