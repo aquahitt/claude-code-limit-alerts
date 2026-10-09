@@ -25,6 +25,12 @@
 set -u
 
 MODE="${1:-status}"
+
+# refresh_via_cli below runs `claude -p /usage`, a full headless session that
+# fires this plugin's own hooks. They must not run there: each would make one
+# more request to the usage endpoint (exactly when it is already failing, or
+# rate limiting us), and the Stop hooks would banner a session nobody sees.
+[ "${UM_INTERNAL:-}" = "1" ] && exit 0
 WARN="${UM_WARN:-80}"
 CRIT="${UM_CRIT:-95}"
 RESET_MIN="${UM_RESET_MIN:-50}"
@@ -85,6 +91,40 @@ log_note() {
 }
 log_fetch_fail() { log_note "fetch failed: $1"; } # silent fetch failures used to leave no trace at all
 
+# Backoff after HTTP 429. Without it every hook (past the 60 s cache) and every
+# cron tick asks again, which keeps the rate limit alive. The pause follows
+# Retry-After when the server sends a number of seconds, and otherwise doubles
+# from 5 minutes, capped at an hour. A successful fetch clears it.
+BACKOFF="$DIR/usage-monitor-backoff.json"
+BACKOFF_FIRST=300
+BACKOFF_MAX=3600
+
+backoff_until() { # prints the epoch the backoff ends at, 0 when none
+  "$JQ" -r '.until // 0' "$BACKOFF" 2>/dev/null || echo 0
+}
+
+backoff_active() {
+  [ -f "$BACKOFF" ] || return 1
+  [ "$(date +%s)" -lt "$(backoff_until)" ]
+}
+
+backoff_start() { # $1 = Retry-After value from the response, may be empty
+  local prev delay
+  prev=$("$JQ" -r '.delay // 0' "$BACKOFF" 2>/dev/null || echo 0)
+  case "$1" in
+    ''|*[!0-9]*)  # absent, or an HTTP-date: fall back to doubling
+      if [ "$prev" -gt 0 ] 2>/dev/null; then delay=$(( prev * 2 )); else delay=$BACKOFF_FIRST; fi ;;
+    *) delay="$1" ;;
+  esac
+  [ "$delay" -lt 60 ] && delay=60
+  [ "$delay" -gt "$BACKOFF_MAX" ] && delay=$BACKOFF_MAX
+  "$JQ" -n --argjson u "$(( $(date +%s) + delay ))" --argjson d "$delay" \
+    '{until: $u, delay: $d}' > "$BACKOFF" 2>/dev/null || true
+  echo "$delay"
+}
+
+backoff_clear() { rm -f "$BACKOFF"; }
+
 # Portable timeout: macOS ships neither `timeout` nor `gtimeout` by default,
 # but /usr/bin/perl is always present. alarm() fires in the perl process and
 # its default disposition (terminate) survives exec into the real command.
@@ -117,10 +157,10 @@ resolve_claude_bin() {
 # exit 0 without actually refreshing anything — it just serves its own stale
 # cache — so this compares fetchedAtMs before/after instead of trusting the
 # exit code, otherwise every cron tick logs a false "refreshed" while the
-# cache silently stays days old. This also fires the headless session's own
-# Stop/SessionStart hooks, recursing once into `usage-monitor.sh hook` —
-# safe because hook mode never calls this itself, so the recursion doesn't
-# go any deeper. Only call this from cron/status: calling it from hook mode
+# cache silently stays days old. The headless session fires its own
+# Stop/SessionStart hooks; UM_INTERNAL=1 makes every hook of this project
+# exit at once there, so the refresh never turns into another request to the
+# usage endpoint. Only call this from cron/status: calling it from hook mode
 # would add ~0.5s to every real Claude Code turn.
 refresh_via_cli() {
   local claude_bin
@@ -128,7 +168,7 @@ refresh_via_cli() {
   local claude_json="$HOME/.claude.json"
   local before after
   before=$("$JQ" -r '.cachedUsageUtilization.fetchedAtMs // 0' "$claude_json" 2>/dev/null || echo 0)
-  if ! ( cd "$HOME" && run_with_timeout 15 "$claude_bin" -p "/usage" --output-format json ) >/dev/null 2>&1; then
+  if ! ( cd "$HOME" && UM_INTERNAL=1 run_with_timeout 15 "$claude_bin" -p "/usage" --output-format json ) >/dev/null 2>&1; then
     log_note "'claude -p /usage' refresh failed to run (timeout or error)"
     return 1
   fi
@@ -157,14 +197,22 @@ fetch_usage() {
   local token
   token=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null \
     | "$JQ" -r '.claudeAiOauth.accessToken // empty')
-  local resp http_code
-  if [ -n "$token" ]; then
-    resp=$(curl -sS --max-time 10 -w '\n%{http_code}' https://api.anthropic.com/api/oauth/usage \
+  local resp http_code headers retry_after delay
+  if backoff_active; then
+    # Rate limited a moment ago: no live request and no CLI refresh (it asks
+    # the same endpoint). Only the local fallback below, which costs nothing.
+    [ "$MODE" = "cron" ] && log_fetch_fail "rate limited, live requests paused until $(date -r "$(backoff_until)" '+%H:%M')"
+  elif [ -n "$token" ]; then
+    headers=$(mktemp "$DIR/.usage-headers.XXXXXX" 2>/dev/null) || headers=/dev/null
+    resp=$(curl -sS --max-time 10 -D "$headers" -w '\n%{http_code}' https://api.anthropic.com/api/oauth/usage \
       -H "Authorization: Bearer $token" \
       -H "anthropic-beta: oauth-2025-04-20" 2>/dev/null)
     http_code="${resp##*$'\n'}"
     resp="${resp%$'\n'*}"
+    retry_after=$(awk -F': *' 'tolower($1) == "retry-after" { gsub(/\r/, "", $2); print $2 }' "$headers" 2>/dev/null | tail -1)
+    [ "$headers" != /dev/null ] && rm -f "$headers"
     if [ "$http_code" = "200" ] && echo "$resp" | "$JQ" -e '.limits' >/dev/null 2>&1; then
+      backoff_clear
       echo "$resp" > "$CACHE"
       echo "$resp"
       return 0
@@ -174,7 +222,8 @@ fetch_usage() {
     # together can get there) and clears up on its own.
     case "$http_code" in
       401|403) log_fetch_fail "live endpoint returned HTTP $http_code (token likely expired/invalid — refreshes only while Claude Code is active)" ;;
-      429)     log_fetch_fail "live endpoint returned HTTP 429 (rate limited — too many requests, will retry on the next check)" ;;
+      429)     delay=$(backoff_start "$retry_after")
+               log_fetch_fail "live endpoint returned HTTP 429 (rate limited — pausing live requests for $(( delay / 60 )) min${retry_after:+, Retry-After: $retry_after})" ;;
       *)       log_fetch_fail "live endpoint returned HTTP ${http_code:-?}" ;;
     esac
   else
@@ -187,7 +236,7 @@ fetch_usage() {
   # running to refresh it. Either way, try to force a fresh local read via
   # the CLI itself before falling back to whatever's already cached — only
   # from cron/status, never from hook (see refresh_via_cli comment).
-  if [ "$MODE" = "cron" ] || [ "$MODE" = "status" ]; then
+  if { [ "$MODE" = "cron" ] || [ "$MODE" = "status" ]; } && ! backoff_active; then
     refresh_via_cli
   fi
   # Fall back to the same data Claude Code's own /usage command already
@@ -317,10 +366,16 @@ if ! USAGE=$(fetch_usage); then
       age_ru="$(( age_min / 60 )) ч"; age_en="$(( age_min / 60 )) h"
     fi
     cache_at=$(date -r "$cache_mtime" "+%d.%m %H:%M")
+    next_en=""; next_ru=""
+    if backoff_active; then
+      next_at=$(date -r "$(backoff_until)" '+%H:%M')
+      next_en=" Rate limited, next attempt at ${next_at}."
+      next_ru=" Запросы ограничены, следующая попытка в ${next_at}."
+    fi
     if [ "$LANG_UM" = "en" ]; then
-      echo "⚠ No live data — showing the cache from ${cache_at} (${age_en} ago). Details: $LOG"
+      echo "⚠ No live data — showing the cache from ${cache_at} (${age_en} ago).${next_en} Details: $LOG"
     else
-      echo "⚠ Свежих данных нет — показан кэш от ${cache_at} (${age_ru} назад). Подробности: $LOG"
+      echo "⚠ Свежих данных нет — показан кэш от ${cache_at} (${age_ru} назад).${next_ru} Подробности: $LOG"
     fi
   else
     if [ "$LANG_UM" = "en" ]; then

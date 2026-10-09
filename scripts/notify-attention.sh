@@ -16,6 +16,10 @@
 #
 # Environment overrides: UM_LANG=ru|en
 
+# Inside the headless `claude -p /usage` that usage-monitor.sh runs: nobody is
+# there to notify.
+[ "${UM_INTERNAL:-}" = "1" ] && exit 0
+
 input=$(cat)
 event="${1:-notification}"
 LANG_UM="${UM_LANG:-ru}"

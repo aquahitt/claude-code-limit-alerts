@@ -118,6 +118,25 @@ same state, both would see a threshold as new, and the warning would arrive
 twice. A run that cannot take the lock within ~5 s exits quietly — the holder
 reports the same news. A lock older than a minute is treated as abandoned.
 
+### Rate limiting / Ограничение частоты
+
+When the usage endpoint answers **429**, live requests pause: for
+`Retry-After` seconds when the server sends a number, otherwise for 5 minutes,
+doubling on each further 429, capped at an hour. The pause lives in
+`usage-monitor-backoff.json` in the state directory and is cleared by the next
+successful fetch. During it no live request and no `claude -p /usage` refresh
+is made; hook and cron stay silent, and `status` shows the last cache with
+the time of the next attempt.
+
+`claude -p /usage` is a full headless session that fires this project's own
+hooks. It runs with `UM_INTERNAL=1`, and every hook script exits at once when
+it sees that — otherwise each refresh would send one more request to the very
+endpoint that is failing, and the Stop hooks would banner a session nobody sees.
+
+После ответа 429 живые запросы приостанавливаются (по `Retry-After` или
+5 → 10 → 20 … минут, не больше часа), а внутренний `claude -p /usage` не
+запускает хуки проекта — иначе каждая проверка порождала бы ещё один запрос.
+
 Обновление файла состояния идёт под блокировкой: иначе одновременные запуски
 (Stop-хук, `SessionStart`, launchd) читали бы одно состояние и присылали одно
 предупреждение дважды.
@@ -376,6 +395,7 @@ anti-spam state, duplicating every notification.
 | `~/.claude/scripts/statusline-base.cmd` | preserved previous statusline command (optional) |
 | `~/.claude/scripts/usage-monitor-cache.json` | cached API response |
 | `~/.claude/scripts/usage-monitor-state.json` | notification state |
+| `~/.claude/scripts/usage-monitor-backoff.json` | pause after HTTP 429 (exists only while one runs) |
 | `~/.claude/scripts/usage-monitor.lock` | state-update lock (exists only while a check runs) |
 | `~/.claude/scripts/compact-advisor-state.json` | compact-signal anti-spam state |
 | `~/.claude/scripts/.limit-alerts-options` | options chosen at install time |
