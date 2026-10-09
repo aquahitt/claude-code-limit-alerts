@@ -14,6 +14,8 @@
   marketplace не входит: API модов пока в early access. Запуск:
   `claude --plugin-dir mods/limit-alerts-status`.
 
+## [0.6.2] - 2026-10-09
+
 ### Changed
 
 - `usage-monitor.sh status` (и скилл `limit-alerts:status`) больше не молчит,
