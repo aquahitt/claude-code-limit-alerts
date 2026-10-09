@@ -14,6 +14,8 @@
   marketplace не входит: API модов пока в early access. Запуск:
   `claude --plugin-dir mods/limit-alerts-status`.
 
+## [0.6.3] - 2026-10-10
+
 ### Fixed
 
 - После ответа HTTP 429 проверки продолжали спрашивать endpoint лимитов на
