@@ -72,7 +72,8 @@ If live data can't be fetched (for example, the endpoint answers 429),
   (which is preserved and keeps rendering). Claude Code itself passes the 5h
   and 7d percentages to the statusline, current as of its last API response;
   the model-scoped weekly limit and the first moments of a session come from a
-  local cache. The statusline makes no network calls.
+  local cache. The statusline makes no network calls. Once a window reaches
+  the warning threshold, its reset time appears next to it: `5h 84% ↻00:20`.
 - No spam: one notification per threshold (80% and 95%) per window; a reset is
   only announced if usage was ≥ 50%.
 
@@ -244,6 +245,7 @@ the defaults at the top of `usage-monitor.sh`):
 | `UM_SUBAGENT_MODEL` | `1` | show the model of a running subagent |
 | `UM_SUBAGENT_TTL` | `180` | how recently a subagent must have written for it to count as running, seconds |
 | `UM_STATUSLINE_ADVISOR` | `1` | show the advisor model (`/advisor`) |
+| `UM_STATUSLINE_RESET` | `1` | reset time next to a window that reached the warning threshold: `5h 84% ↻00:20`, the date `↻15.10` when it is over a day away |
 
 The background check interval is `StartInterval` (seconds) in
 `~/Library/LaunchAgents/com.claude.usage-monitor.plist`.
