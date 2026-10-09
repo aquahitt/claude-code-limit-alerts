@@ -16,6 +16,10 @@
 
 set -euo pipefail
 
+# The headless `claude -p /usage` refresh in usage-monitor.sh needs none of
+# this, and must not touch settings.json or launchd from inside a check.
+[ "${UM_INTERNAL:-}" = "1" ] && exit 0
+
 DATA="${UM_STATE_DIR:-${CLAUDE_PLUGIN_DATA:-}}"
 ROOT="${CLAUDE_PLUGIN_ROOT:-}"
 [ -n "$DATA" ] && [ -n "$ROOT" ] || exit 0

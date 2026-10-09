@@ -80,6 +80,10 @@ from the same files with no copy.
 - `userConfig` defaults are never materialised into the environment — an unset
   `CLAUDE_PLUGIN_OPTION_*` is the normal case, so every default is duplicated in
   bash. Booleans arrive as the literal strings `true` / `false`.
+- **Every hook script exits at once on `UM_INTERNAL=1`.** `usage-monitor.sh`
+  sets it on its headless `claude -p /usage` refresh, which fires this
+  project's own hooks; without the early exit each refresh made one more
+  request to the usage endpoint. A new hook script needs the same line.
 - **`CLAUDE_PLUGIN_OPTION_*` leak just like `CLAUDE_PLUGIN_DATA`** — the
   names are generic, not per plugin. A script reads them only behind the
   `FROM_PLUGIN` check (`${BASH_SOURCE[0]}` under `${CLAUDE_PLUGIN_ROOT}`), so a

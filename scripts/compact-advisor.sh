@@ -22,6 +22,9 @@
 
 set -u
 
+# See usage-monitor.sh: nothing to advise inside its headless /usage refresh.
+[ "${UM_INTERNAL:-}" = "1" ] && exit 0
+
 WARN="${UM_COMPACT_WARN:-70}"
 LANG_UM="${UM_LANG:-ru}"
 
