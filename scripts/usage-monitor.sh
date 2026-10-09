@@ -169,7 +169,14 @@ fetch_usage() {
       echo "$resp"
       return 0
     fi
-    log_fetch_fail "live endpoint returned HTTP ${http_code:-?} (token likely expired/invalid — refreshes only while Claude Code is active)"
+    # The reason matters for diagnosis: 401/403 point at the token, 429 only
+    # means too many requests in a short window (hooks, cron and `status`
+    # together can get there) and clears up on its own.
+    case "$http_code" in
+      401|403) log_fetch_fail "live endpoint returned HTTP $http_code (token likely expired/invalid — refreshes only while Claude Code is active)" ;;
+      429)     log_fetch_fail "live endpoint returned HTTP 429 (rate limited — too many requests, will retry on the next check)" ;;
+      *)       log_fetch_fail "live endpoint returned HTTP ${http_code:-?}" ;;
+    esac
   else
     log_fetch_fail "no OAuth token in keychain"
   fi

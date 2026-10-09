@@ -67,5 +67,8 @@ rm -f "$SCRIPTS_DIR/usage-monitor.sh" \
       "$SCRIPTS_DIR/.limit-alerts-version" \
       "$SCRIPTS_DIR/.limit-alerts-options"
 rm -f "$SCRIPTS_DIR"/auto-resume-*.lock
+# usage-monitor.lock is a directory, and normally exists only while a check
+# runs; a run killed mid-update can leave it behind.
+rmdir "$SCRIPTS_DIR/usage-monitor.lock" 2>/dev/null || true
 
 echo "Done. Restart Claude Code to apply."
