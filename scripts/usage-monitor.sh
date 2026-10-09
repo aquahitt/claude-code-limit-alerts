@@ -283,17 +283,10 @@ to_local() { # $1 = ISO8601 UTC timestamp, $2 = output format
   date -r "$epoch" "$2"
 }
 
-USAGE=$(fetch_usage) || exit 0
-
-# limits[] -> "kind|percent|resets_at|scope" lines
-LIMITS=$(echo "$USAGE" | "$JQ" -r \
-  '.limits[] | [.kind, (.percent // 0), (.resets_at // ""), (.scope.model.display_name // "")] | join("|")')
-
-if [ "$MODE" = "limits" ]; then
-  printf '%s\n' "$LIMITS"
-  exit 0
-fi
-
+# `status` is read by a person, so it always says something: the version
+# first, then live numbers, or the last cached numbers marked with their age,
+# or a line saying there is no data. hook and cron must never act on stale
+# numbers, so for them a failed fetch still means silence.
 if [ "$MODE" = "status" ]; then
   # install.sh writes .limit-alerts-version into the state directory; in plugin
   # mode nobody does, and VERSION at the plugin root is the source of truth.
@@ -310,13 +303,61 @@ if [ "$MODE" = "status" ]; then
   if [ -n "$VERSION_FILE" ]; then
     printf 'claude-code-limit-alerts v%s\n' "$(cat "$VERSION_FILE")"
   fi
+fi
+
+if ! USAGE=$(fetch_usage); then
+  [ "$MODE" = "status" ] || exit 0
+  if [ -s "$CACHE" ] && "$JQ" -e '.limits' "$CACHE" >/dev/null 2>&1; then
+    USAGE=$(cat "$CACHE")
+    cache_mtime=$(stat -f %m "$CACHE" 2>/dev/null || echo 0)
+    age_min=$(( ($(date +%s) - cache_mtime) / 60 ))
+    if [ "$age_min" -lt 60 ]; then
+      age_ru="${age_min} мин"; age_en="${age_min} min"
+    else
+      age_ru="$(( age_min / 60 )) ч"; age_en="$(( age_min / 60 )) h"
+    fi
+    cache_at=$(date -r "$cache_mtime" "+%d.%m %H:%M")
+    if [ "$LANG_UM" = "en" ]; then
+      echo "⚠ No live data — showing the cache from ${cache_at} (${age_en} ago). Details: $LOG"
+    else
+      echo "⚠ Свежих данных нет — показан кэш от ${cache_at} (${age_ru} назад). Подробности: $LOG"
+    fi
+  else
+    if [ "$LANG_UM" = "en" ]; then
+      echo "No usage data: the request failed and there is no cache yet. Details: $LOG"
+    else
+      echo "Нет данных о лимитах: запрос не удался, а кэша ещё нет. Подробности: $LOG"
+    fi
+    exit 0
+  fi
+fi
+
+# limits[] -> "kind|percent|resets_at|scope" lines
+LIMITS=$(echo "$USAGE" | "$JQ" -r \
+  '.limits[] | [.kind, (.percent // 0), (.resets_at // ""), (.scope.model.display_name // "")] | join("|")')
+
+if [ "$MODE" = "limits" ]; then
+  printf '%s\n' "$LIMITS"
+  exit 0
+fi
+
+if [ "$MODE" = "status" ]; then
   while IFS='|' read -r kind percent resets scope; do
     [ -n "$kind" ] || continue
     reset_local=$(to_local "$resets" "+%d.%m %H:%M")
+    # From a stale cache, a window whose reset time has already passed has
+    # rolled over since: its percent no longer says anything, so say so.
+    passed=""
+    if [ -n "${cache_at:-}" ] && [ -n "$resets" ]; then
+      reset_epoch=$(to_epoch "$resets")
+      if [ -n "$reset_epoch" ] && [ "$reset_epoch" -le "$(date +%s)" ]; then
+        if [ "$LANG_UM" = "en" ]; then passed=" (already reset)"; else passed=" (уже сброшен)"; fi
+      fi
+    fi
     if [ "$LANG_UM" = "en" ]; then
-      printf "%-22s %3s%%  resets: %s\n" "$(label_for "$kind" "$scope")" "$percent" "$reset_local"
+      printf "%-22s %3s%%  resets: %s%s\n" "$(label_for "$kind" "$scope")" "$percent" "$reset_local" "$passed"
     else
-      printf "%-22s %3s%%  сброс: %s\n" "$(label_for "$kind" "$scope")" "$percent" "$reset_local"
+      printf "%-22s %3s%%  сброс: %s%s\n" "$(label_for "$kind" "$scope")" "$percent" "$reset_local" "$passed"
     fi
   done <<< "$LIMITS"
   exit 0
