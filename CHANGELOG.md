@@ -14,6 +14,8 @@
   marketplace не входит: API модов пока в early access. Запуск:
   `claude --plugin-dir mods/limit-alerts-status`.
 
+## [0.7.0] - 2026-10-10
+
 ### Changed
 
 - Statusline берёт проценты 5ч и 7д из собственного stdin: Claude Code сам
