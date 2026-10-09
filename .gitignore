@@ -5,3 +5,6 @@ docs/superpowers/
 .superpowers/
 # Engine-generated API typings, laid when a mod is loaded from disk
 mods/*/.claude-plugin/types/
+# Local, machine-specific: an IDE MCP endpoint and Claude Code worktrees
+.mcp.json
+.claude/worktrees/
