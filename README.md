@@ -43,7 +43,7 @@ Claude: stroi-homes (develop)          ← какая сессия
 
 ```
 $ ~/.claude/scripts/usage-monitor.sh status
-claude-code-limit-alerts v0.6.1
+claude-code-limit-alerts vX.Y.Z
 Сессия (5ч)           71%  сброс: 16.07 18:00
 Неделя (все модели)    7%  сброс: 17.07 10:00
 Неделя (Fable)         4%  сброс: 17.07 10:00
