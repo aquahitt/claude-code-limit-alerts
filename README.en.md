@@ -69,8 +69,10 @@ If live data can't be fetched (for example, the endpoint answers 429),
   `~/.claude/scripts` and appends hooks to `~/.claude/settings.json`. The
   monitoring logic is identical in both — they are the same files.
 - The **statusline wrapper** appends percentages to your existing statusline
-  (which is preserved and keeps rendering) — data comes from a local cache,
-  no network calls on the statusline path.
+  (which is preserved and keeps rendering). Claude Code itself passes the 5h
+  and 7d percentages to the statusline, current as of its last API response;
+  the model-scoped weekly limit and the first moments of a session come from a
+  local cache. The statusline makes no network calls.
 - No spam: one notification per threshold (80% and 95%) per window; a reset is
   only announced if usage was ≥ 50%.
 
