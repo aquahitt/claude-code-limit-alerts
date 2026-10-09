@@ -44,7 +44,7 @@ not allowed in Notification Center.
 
 ```
 $ ~/.claude/scripts/usage-monitor.sh status
-claude-code-limit-alerts v0.6.1
+claude-code-limit-alerts vX.Y.Z
 Session (5h)          71%  resets: 16.07 18:00
 Week (all models)      7%  resets: 17.07 10:00
 Week (Fable)           4%  resets: 17.07 10:00
