@@ -38,6 +38,9 @@
 #   UM_STATUSLINE_ADVISOR=1  0 hides "adv <model>" (the /advisor model, shown
 #                          only when its family differs from the session's)
 #   UM_SUBAGENT_MODEL=1    0 hides "⇢ <subagent model>"
+#   UM_STATUSLINE_RESET=1  0 hides the reset time shown next to a window that
+#                          has reached UM_WARN ("5ч 84% ↻00:20"; past a day
+#                          away, the date instead: "↻15.10")
 #   UM_SUBAGENT_TTL=180    how recently a subagent transcript must have been
 #                          written for the subagent to count as running, sec
 
@@ -54,6 +57,7 @@ SL_CTX="${UM_STATUSLINE_CTX:-1}"
 SL_ADVISOR="${UM_STATUSLINE_ADVISOR:-1}"
 SL_SUBAGENT="${UM_SUBAGENT_MODEL:-1}"
 SUBAGENT_TTL="${UM_SUBAGENT_TTL:-180}"
+SL_RESET="${UM_STATUSLINE_RESET:-1}"
 SETTINGS="$HOME/.claude/settings.json"
 
 # Real ESC bytes, not the literal text "\033[...]". The final render uses
@@ -256,35 +260,59 @@ if [ "$SL_MODEL" = "1" ] && [ -x "$JQ" ]; then
   fi
 fi
 
+# Near a limit the question is "until when?", so a window at or above WARN
+# gets its reset time, dim, after the percent: HH:MM within a day, the date
+# beyond that. Below WARN the line stays as short as it was.
+reset_suffix() { # $1 = percent, $2 = reset epoch (0 = unknown)
+  [ "$SL_RESET" = "1" ] || return 0
+  [ "$1" -ge "$WARN" ] 2>/dev/null || return 0
+  local now
+  now=$(date +%s)
+  [ "${2:-0}" -gt "$now" ] 2>/dev/null || return 0
+  if [ $(( $2 - now )) -lt 86400 ]; then
+    printf ' %s↻%s%s' "$DIM" "$(date -r "$2" +%H:%M)" "$RST"
+  else
+    printf ' %s↻%s%s' "$DIM" "$(date -r "$2" +%d.%m)" "$RST"
+  fi
+}
+
 LIMITS=""
-s=""; w=""; f="-1"; SCOPED_MODEL=""
+s=""; w=""; r5=0; r7=0; f="-1"; rf=0; SCOPED_MODEL=""
 if [ -x "$JQ" ]; then
   # Both windows or neither: one live and one cached number side by side would
-  # silently mix two moments.
-  read -r s w <<< "$(printf '%s' "$INPUT" | "$JQ" -r '
-    [.rate_limits.five_hour.used_percentage, .rate_limits.seven_day.used_percentage]
-    | if all(type == "number") then (map(floor | tostring) | join(" ")) else "" end' 2>/dev/null)"
+  # silently mix two moments. resets_at arrives here as epoch seconds.
+  read -r s w r5 r7 <<< "$(printf '%s' "$INPUT" | "$JQ" -r '
+    .rate_limits as $rl
+    | [$rl.five_hour.used_percentage, $rl.seven_day.used_percentage]
+    | if all(type == "number") then
+        (map(floor) + [($rl.five_hour.resets_at // 0), ($rl.seven_day.resets_at // 0)]
+         | map(tostring) | join(" "))
+      else "" end' 2>/dev/null)"
   if [ -f "$CACHE" ]; then
-    # The scoped limit is shown only while its window is still open: from a
-    # cache that outlived its reset, the number no longer means anything.
-    IFS=$'\t' read -r cs cw f SCOPED_MODEL <<< "$("$JQ" -r '
+    # The cache stores resets_at as ISO 8601. The scoped limit is shown only
+    # while its window is still open: from a cache that outlived its reset,
+    # the number no longer means anything. SCOPED_MODEL goes last because it
+    # may be empty, and read collapses empty tab-separated fields.
+    IFS=$'\t' read -r cs cw f cr5 cr7 rf SCOPED_MODEL <<< "$("$JQ" -r '
+      def epoch: (. // "") | sub("\\.[0-9]+"; "") | sub("(\\+00:00|Z)$"; "Z")
+                 | (try fromdateiso8601 catch 0);
       ([.limits[]? | select(.kind == "weekly_scoped")][0]) as $sc
-      | (($sc.resets_at // "") | sub("\\.[0-9]+"; "") | sub("(\\+00:00|Z)$"; "Z")
-         | (try fromdateiso8601 catch 0)) as $reset
+      | ($sc.resets_at | epoch) as $reset
       | [ (.five_hour.utilization // 0 | floor),
           (.seven_day.utilization // 0 | floor),
           (if $sc != null and ($sc.percent | type) == "number" and ($reset == 0 or $reset > now)
              then ($sc.percent | floor) else -1 end),
+          (.five_hour.resets_at | epoch), (.seven_day.resets_at | epoch), $reset,
           ($sc.scope.model.display_name // "") ]
       | map(tostring) | join("\t")' "$CACHE" 2>/dev/null)"
-    if [ -z "$s" ]; then s="${cs:-}"; w="${cw:-}"; fi
+    if [ -z "$s" ]; then s="${cs:-}"; w="${cw:-}"; r5="${cr5:-0}"; r7="${cr7:-0}"; fi
   fi
   if [ -n "$s" ] && [ -n "$w" ]; then
-    LIMITS="${L5} $(colorize "$s") ${DIM}·${RST} ${L7} $(colorize "$w")"
+    LIMITS="${L5} $(colorize "$s")$(reset_suffix "$s" "$r5") ${DIM}·${RST} ${L7} $(colorize "$w")$(reset_suffix "$w" "$r7")"
     # model-scoped weekly limit (-1 = absent or expired, hidden). The WK
     # prefix keeps this from reading as "the model currently running".
     if [ "$f" -ge 0 ] 2>/dev/null && [ -n "$SCOPED_MODEL" ]; then
-      LIMITS="$LIMITS ${DIM}·${RST} ${WK} ${SCOPED_MODEL} $(colorize "$f")"
+      LIMITS="$LIMITS ${DIM}·${RST} ${WK} ${SCOPED_MODEL} $(colorize "$f")$(reset_suffix "$f" "${rf:-0}")"
     fi
   fi
 fi

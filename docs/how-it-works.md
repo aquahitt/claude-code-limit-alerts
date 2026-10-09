@@ -85,8 +85,12 @@ don't happen to have it in their environment.
   cache fills in the model-scoped weekly limit (only the usage endpoint
   reports it; hidden once its window has reset) and the first redraws of a
   session, before any API response.
+  A window at or above `UM_WARN` gets its reset time, dim, after the percent
+  (`↻HH:MM` within a day, `↻DD.MM` beyond); below the threshold the line stays
+  short. `UM_STATUSLINE_RESET=0` turns it off.
   5ч и 7д statusline берёт из своего stdin (их передаёт Claude Code), кэш — для
-  недельного лимита по модели и начала сессии. If
+  недельного лимита по модели и начала сессии. У окна, дошедшего до порога,
+  показывается время сброса. If
   `~/.claude/scripts/statusline-base.cmd` exists, its content is executed as the
   base statusline and the limits are appended after a `|` separator.
 - **launchd agent** (`com.claude.usage-monitor`) — runs `usage-monitor.sh cron`
