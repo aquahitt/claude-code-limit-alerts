@@ -52,6 +52,10 @@ SETTINGS="$HOME/.claude/settings.json"
 # are tried because Claude Code accepts either when reading.
 # $1 = KEY in upper case, $2 = key as declared in plugin.json. Prints the value
 # or nothing.
+#
+# The lookup tests for the key instead of chaining with jq's `//`: `//` treats
+# a stored boolean `false` exactly like a missing key, which would turn an
+# explicit "off" into "unset" and make the tri-state steps below do nothing.
 plugin_option() {
   local env_name="CLAUDE_PLUGIN_OPTION_$1" key="$2" v jq_bin
   eval "v=\${$env_name:-}"
@@ -59,9 +63,9 @@ plugin_option() {
   jq_bin="$(command -v jq || echo /opt/homebrew/bin/jq)"
   [ -x "$jq_bin" ] && [ -f "$SETTINGS" ] || return 0
   "$jq_bin" -r --arg k "$key" '
-    (.pluginConfigs["limit-alerts"].options[$k]
-     // .pluginConfigs["limit-alerts@claude-code-limit-alerts"].options[$k]
-     // empty) | tostring' "$SETTINGS" 2>/dev/null
+    [ .pluginConfigs["limit-alerts"], .pluginConfigs["limit-alerts@claude-code-limit-alerts"]
+      | objects | .options | objects | select(has($k)) | .[$k] | select(. != null) ]
+    | if length > 0 then (.[0] | tostring) else empty end' "$SETTINGS" 2>/dev/null
 }
 
 LANG_UM="${UM_LANG:-$(plugin_option LANG lang)}"
@@ -147,6 +151,47 @@ classic_install_detected() {
     "$SETTINGS" >/dev/null 2>&1
 }
 
+# The two opt-in steps below each refuse only when the classic install owns
+# that particular surface. classic_install_detected alone is not enough: an
+# install.sh run with --no-statusline or --no-launchd leaves that surface free,
+# and telling the user it is taken would be false.
+classic_statusline_active() {
+  local jq_bin
+  jq_bin="$(command -v jq || echo /opt/homebrew/bin/jq)"
+  [ -x "$jq_bin" ] && [ -f "$SETTINGS" ] || return 1
+  # "statusline-with-limits" is the classic marker uninstall.sh greps for.
+  "$jq_bin" -r '.statusLine.command // ""' "$SETTINGS" 2>/dev/null \
+    | grep -q "statusline-with-limits"
+}
+
+classic_launchd_active() {
+  [ -f "$HOME/Library/LaunchAgents/com.claude.usage-monitor.plist" ] && return 0
+  [ "${UM_NO_LAUNCHCTL:-0}" = "1" ] && return 1
+  launchctl print "gui/$(id -u)/com.claude.usage-monitor" >/dev/null 2>&1
+}
+
+# $1 = key in .bootstrap-state.json, $2 = English text, $3 = Russian text.
+# Notes about a condition the user has to resolve by hand are said once per
+# data directory: SessionStart also fires on resume, /clear and compaction,
+# and repeating the same advice on each of those is noise.
+note_once() {
+  local key="$1" state="$DATA/.bootstrap-state.json" jq_bin updated
+  jq_bin="$(command -v jq || echo /opt/homebrew/bin/jq)"
+  [ -x "$jq_bin" ] || return 0
+  if [ -f "$state" ] && \
+     "$jq_bin" -e --arg k "$key" '.[$k] == true' "$state" >/dev/null 2>&1; then
+    return 0
+  fi
+  if [ "$LANG_UM" = "en" ]; then note "$2"; else note "$3"; fi
+  if [ -f "$state" ]; then
+    updated=$("$jq_bin" --arg k "$key" '.[$k] = true' "$state" 2>/dev/null) \
+      || updated=$("$jq_bin" -n --arg k "$key" '{($k): true}')
+  else
+    updated=$("$jq_bin" -n --arg k "$key" '{($k): true}')
+  fi
+  printf '%s\n' "$updated" > "$state"
+}
+
 backup_settings() {
   [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
   cp "$SETTINGS" "$SETTINGS.bak.limit-alerts-plugin"
@@ -178,12 +223,10 @@ apply_statusline() {
 
   if [ "$want" = "true" ]; then
     [ "$ours" = "1" ] && return 0
-    if classic_install_detected; then
-      if [ "$LANG_UM" = "en" ]; then
-        note "limit-alerts: a classic install.sh statusline is active, the plugin did not touch it. Run uninstall.sh to switch to the plugin."
-      else
-        note "limit-alerts: активна статусная строка от install.sh, плагин её не трогал. Запустите uninstall.sh, чтобы перейти на плагин."
-      fi
+    if classic_statusline_active; then
+      note_once noted_classic_statusline \
+        "limit-alerts: a classic install.sh statusline is active, the plugin did not touch it. Run uninstall.sh to switch to the plugin." \
+        "limit-alerts: активна статусная строка от install.sh, плагин её не трогал. Запустите uninstall.sh, чтобы перейти на плагин."
       return 0
     fi
     backup_settings || return 1
@@ -245,18 +288,10 @@ apply_launchd() {
   # The classic agent uses the label com.claude.usage-monitor and its own state
   # directory. Two cron jobs with two anti-spam state files would notify twice
   # for every window reset, so refuse rather than double up.
-  local classic_running=1
-  if [ "$sandboxed" != "1" ]; then
-    launchctl print "gui/$(id -u)/com.claude.usage-monitor" >/dev/null 2>&1 || classic_running=0
-  else
-    classic_running=0
-  fi
-  if classic_install_detected || [ "$classic_running" = "1" ]; then
-    if [ "$LANG_UM" = "en" ]; then
-      note "limit-alerts: the install.sh background agent is already running, the plugin did not start a second one. Run uninstall.sh to switch to the plugin."
-    else
-      note "limit-alerts: фоновый агент от install.sh уже работает, плагин не стал запускать второй. Запустите uninstall.sh, чтобы перейти на плагин."
-    fi
+  if classic_launchd_active; then
+    note_once noted_classic_launchd \
+      "limit-alerts: the install.sh background agent is already running, the plugin did not start a second one. Run uninstall.sh to switch to the plugin." \
+      "limit-alerts: фоновый агент от install.sh уже работает, плагин не стал запускать второй. Запустите uninstall.sh, чтобы перейти на плагин."
     return 0
   fi
 
@@ -267,17 +302,41 @@ apply_launchd() {
   . "$ROOT/lib/launchd.sh" || return 1
 
   mkdir -p "$HOME/Library/LaunchAgents" || return 1
-  local existing=""
+  local existing="" candidate="$PLUGIN_PLIST.new" changed=1 loaded=0
   [ -f "$PLUGIN_PLIST" ] && existing="$PLUGIN_PLIST"
   generate_plist "$ROOT/launchd/com.claude.usage-monitor.plist.template" \
-    "$PLUGIN_PLIST" "" "$existing" \
-    "$PLUGIN_LABEL" "$BIN/cron.sh" "/tmp/claude-usage-monitor-plugin.err" || return 1
-
-  if [ "$sandboxed" != "1" ]; then
-    launchctl bootout "gui/$(id -u)/$PLUGIN_LABEL" 2>/dev/null || true
-    launchctl bootstrap "gui/$(id -u)" "$PLUGIN_PLIST" 2>/dev/null || return 1
+    "$candidate" "" "$existing" \
+    "$PLUGIN_LABEL" "$BIN/cron.sh" "/tmp/claude-usage-monitor-plugin.err" \
+    || { rm -f "$candidate"; return 1; }
+  if [ -n "$existing" ] && cmp -s "$candidate" "$PLUGIN_PLIST"; then
+    changed=0
+    rm -f "$candidate"
+  else
+    mv -f "$candidate" "$PLUGIN_PLIST" || { rm -f "$candidate"; return 1; }
   fi
-  return 0
+
+  [ "$sandboxed" = "1" ] && return 0
+
+  launchctl print "gui/$(id -u)/$PLUGIN_LABEL" >/dev/null 2>&1 && loaded=1
+  # This runs on every SessionStart — resume, /clear and compaction included.
+  # An agent that is loaded from an unchanged plist is left alone: reloading
+  # it would restart it (RunAtLoad fires a cron run alongside this session's
+  # own SessionStart check) and risk the bootout/bootstrap race below for
+  # nothing.
+  [ "$changed" = "0" ] && [ "$loaded" = "1" ] && return 0
+
+  if [ "$loaded" = "1" ]; then
+    launchctl bootout "gui/$(id -u)/$PLUGIN_LABEL" 2>/dev/null || true
+  fi
+  # bootout returns before the job is fully torn down, and a bootstrap issued
+  # in that window fails with "5: Input/output error". Retry briefly instead
+  # of reporting a failure and leaving the agent unloaded until next session.
+  local attempt
+  for attempt in 1 2 3 4 5 6 7 8 9 10; do
+    launchctl bootstrap "gui/$(id -u)" "$PLUGIN_PLIST" 2>/dev/null && return 0
+    [ "$attempt" -lt 10 ] && sleep 0.3
+  done
+  return 1
 }
 
 if ! apply_launchd; then
@@ -295,29 +354,10 @@ fi
 # would arrive twice. The plugin never edits settings.json to fix this — that
 # file belongs to the user; it only points at uninstall.sh.
 warn_double_install() {
-  local state="$DATA/.bootstrap-state.json" jq_bin updated
-  jq_bin="$(command -v jq || echo /opt/homebrew/bin/jq)"
-  [ -x "$jq_bin" ] || return 0
   classic_install_detected || return 0
-  if [ -f "$state" ] && \
-     "$jq_bin" -e '.warned_double_install == true' "$state" >/dev/null 2>&1; then
-    return 0
-  fi
-
-  if [ "$LANG_UM" = "en" ]; then
-    note "limit-alerts: a classic install.sh installation is active alongside the plugin — hooks fire twice and notifications will be duplicated. Run uninstall.sh from the repository to keep only the plugin."
-  else
-    note "limit-alerts: рядом с плагином активна классическая установка install.sh — хуки срабатывают дважды, уведомления будут дублироваться. Запустите uninstall.sh из репозитория, чтобы остался только плагин."
-  fi
-
-  if [ -f "$state" ]; then
-    updated=$("$jq_bin" '.warned_double_install = true' "$state" 2>/dev/null) \
-      || updated='{"warned_double_install":true}'
-  else
-    updated='{"warned_double_install":true}'
-  fi
-  printf '%s\n' "$updated" > "$state"
-  return 0
+  note_once warned_double_install \
+    "limit-alerts: a classic install.sh installation is active alongside the plugin — hooks fire twice and notifications will be duplicated. Run uninstall.sh from the repository to keep only the plugin." \
+    "limit-alerts: рядом с плагином активна классическая установка install.sh — хуки срабатывают дважды, уведомления будут дублироваться. Запустите uninstall.sh из репозитория, чтобы остался только плагин."
 }
 
 warn_double_install || true
