@@ -43,7 +43,9 @@ INPUT=$(cat)
 WARN="${UM_WARN:-80}"
 CRIT="${UM_CRIT:-95}"
 LANG_UM="${UM_LANG:-ru}"
-[ -n "${CLAUDE_PLUGIN_OPTION_LANG:-}" ] && LANG_UM="${UM_LANG:-$CLAUDE_PLUGIN_OPTION_LANG}"
+# No CLAUDE_PLUGIN_OPTION_LANG here: in plugin mode this file runs as the copy
+# in ${CLAUDE_PLUGIN_DATA}/bin, through a wrapper that already exports UM_LANG,
+# so a plugin option seen here could only be another plugin's, leaked.
 SL_MODEL="${UM_STATUSLINE_MODEL:-1}"
 SL_CTX="${UM_STATUSLINE_CTX:-1}"
 SL_ADVISOR="${UM_STATUSLINE_ADVISOR:-1}"

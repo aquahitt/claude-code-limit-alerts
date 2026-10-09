@@ -80,6 +80,11 @@ from the same files with no copy.
 - `userConfig` defaults are never materialised into the environment — an unset
   `CLAUDE_PLUGIN_OPTION_*` is the normal case, so every default is duplicated in
   bash. Booleans arrive as the literal strings `true` / `false`.
+- **`CLAUDE_PLUGIN_OPTION_*` leak just like `CLAUDE_PLUGIN_DATA`** — the
+  names are generic, not per plugin. A script reads them only behind the
+  `FROM_PLUGIN` check (`${BASH_SOURCE[0]}` under `${CLAUDE_PLUGIN_ROOT}`), so a
+  classic install never sees them. In `pluginConfigs` lookups, test with
+  `has()`, never jq's `//`: `//` treats a stored `false` as missing.
 - The plugin's launchd label is `com.claude.usage-monitor.plugin`, deliberately
   distinct from the classic one, and `UM_NO_LAUNCHCTL=1` makes the bootstrap
   generate the plist without touching launchd (which ignores `HOME`, so this is

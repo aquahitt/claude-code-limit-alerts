@@ -23,8 +23,18 @@ LANG_UM="${UM_LANG:-ru}"
 # Plugin hooks are declared statically and cannot be registered conditionally,
 # so an opted-out feature turns itself off here. Unset means "classic install
 # or never configured" — both of which want the feature on.
-[ "${CLAUDE_PLUGIN_OPTION_ATTENTION:-true}" = "false" ] && exit 0
-[ -n "${CLAUDE_PLUGIN_OPTION_LANG:-}" ] && LANG_UM="${UM_LANG:-$CLAUDE_PLUGIN_OPTION_LANG}"
+# CLAUDE_PLUGIN_OPTION_* are generic names that, like CLAUDE_PLUGIN_DATA,
+# leak from whichever plugin owns the running hook. They are honoured only
+# when this very file is the copy inside the limit-alerts plugin, so another
+# plugin's LANG/WARN/... can never reconfigure (or switch off) a classic
+# install. A leaked CLAUDE_PLUGIN_ROOT points at that other plugin and does not
+# match.
+FROM_PLUGIN=0
+case "${BASH_SOURCE[0]}" in "${CLAUDE_PLUGIN_ROOT:-/nonexistent}"/*) FROM_PLUGIN=1 ;; esac
+if [ "$FROM_PLUGIN" = "1" ]; then
+  [ "${CLAUDE_PLUGIN_OPTION_ATTENTION:-true}" = "false" ] && exit 0
+  [ -n "${CLAUDE_PLUGIN_OPTION_LANG:-}" ] && LANG_UM="${UM_LANG:-$CLAUDE_PLUGIN_OPTION_LANG}"
+fi
 
 cwd=$(jq -r '.cwd // empty' <<<"$input" 2>/dev/null)
 cwd=${cwd:-$PWD}
