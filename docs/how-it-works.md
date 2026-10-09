@@ -111,6 +111,17 @@ On every check, for each limit:
 
 Multiple messages from one check are combined into a single notification.
 
+The read-modify-write of the state file runs under a lock (`usage-monitor.lock`,
+a directory in the state directory). The Stop hook, `SessionStart` and the
+launchd job can fire at the same moment; without the lock both would read the
+same state, both would see a threshold as new, and the warning would arrive
+twice. A run that cannot take the lock within ~5 s exits quietly — the holder
+reports the same news. A lock older than a minute is treated as abandoned.
+
+Обновление файла состояния идёт под блокировкой: иначе одновременные запуски
+(Stop-хук, `SessionStart`, launchd) читали бы одно состояние и присылали одно
+предупреждение дважды.
+
 ## Limit reset: Claude Code does it itself / Сброс лимита
 
 A usage limit does not end the session — the turn is aborted (the CLI fires
@@ -260,12 +271,22 @@ whenever the user edits the plugin configuration. Gating them on the version
 would leave the statusline and the background agent on stale language and
 thresholds until the next release.
 
+The launchd plist is regenerated on every session start too, but the agent is
+reloaded only when the plist actually changed or the agent is not loaded.
+`SessionStart` also fires on resume, `/clear` and compaction; reloading each
+time would restart the agent (its `RunAtLoad` run racing the session's own
+check) and hit launchd's bootout/bootstrap race, where a bootstrap issued too
+soon fails with `5: Input/output error`. When a reload is needed, the bootstrap
+is retried briefly for the same reason.
+
 Options are resolved environment-first, then from
 `pluginConfigs` in `~/.claude/settings.json` — the skills run the bootstrap from
 a plain shell, which receives no `CLAUDE_PLUGIN_OPTION_*` at all. For the two
 settings that write outside the plugin the option is tri-state: `true` applies,
 `false` removes, and unset does nothing, so running the bootstrap from a shell
-can never tear down a statusline the user just enabled.
+can never tear down a statusline the user just enabled. The `pluginConfigs`
+lookup tests for the key with `has()`: jq's `//` would treat a stored boolean
+`false` as missing and turn "off" into "unset".
 
 `notify-attention.sh` and `compact-advisor.sh` are deliberately **not**
 mirrored: they only ever run from hooks, where `${CLAUDE_PLUGIN_ROOT}` already
@@ -301,7 +322,7 @@ plugin's data directory. `hooks.json` and both wrappers always pass
 | `bin/cron.sh`, `bin/statusline.sh` | generated env wrappers |
 | `usage-monitor-cache.json`, `usage-monitor-state.json` | as in the classic install |
 | `compact-advisor-state.json`, `statusline-base.cmd` | as in the classic install |
-| `.bootstrap-state.json` | one-shot flags (double-install warning) |
+| `.bootstrap-state.json` | one-shot flags (double-install warning, classic-surface notes) |
 
 ### Options / Настройки
 
@@ -311,10 +332,21 @@ as the literal strings `true` / `false`. A `default` declared in the manifest is
 one of those variables is exported. So every default also lives in bash, and an
 unset variable means "use the script default".
 
+The names are generic (`CLAUDE_PLUGIN_OPTION_LANG`, not one per plugin) and,
+like `CLAUDE_PLUGIN_DATA`, leak from whichever plugin owns the running hook. So
+a script honours them only when it is itself the copy inside this plugin —
+`${BASH_SOURCE[0]}` lies under `${CLAUDE_PLUGIN_ROOT}`. A classic install never
+reads them, and another plugin's `LANG` or `ATTENTION=false` cannot reconfigure
+it.
+
 Дефолт из манифеста в окружение не попадает: пока пользователь не открыл диалог
 настройки, ни одной переменной `CLAUDE_PLUGIN_OPTION_*` нет. Поэтому каждый
 дефолт продублирован в bash, а отсутствие переменной означает «взять
 скриптовый».
+
+Имена переменных общие для всех плагинов и протекают в чужие хуки, поэтому
+скрипт читает их, только если сам лежит внутри этого плагина. Классическая
+установка их не видит.
 
 ### Coexistence / Сосуществование
 
@@ -322,9 +354,16 @@ The plugin's launchd agent uses a separate label,
 `com.claude.usage-monitor.plugin`, so it never overwrites the plist
 `install.sh` owns. Its statusline ownership marker is the data directory path,
 distinct from the classic `statusline-with-limits` marker `uninstall.sh` greps
-for. If a classic install is detected, the plugin refuses to touch either
-surface and warns once — two installations would fire every hook twice and keep
-separate anti-spam state, duplicating every notification.
+for.
+
+Each opt-in surface is refused only when the classic install actually owns it:
+the statusline when `statusLine.command` carries the classic
+`statusline-with-limits` marker, the agent when the classic plist exists or its
+label is loaded. An `install.sh --no-statusline` / `--no-launchd` leaves that
+surface free, and the plugin takes it. Each refusal is said once per data
+directory. Separately, classic hooks alongside the plugin get a one-time
+warning: two installations would fire every hook twice and keep separate
+anti-spam state, duplicating every notification.
 
 ## Files / Файлы
 
@@ -337,6 +376,7 @@ separate anti-spam state, duplicating every notification.
 | `~/.claude/scripts/statusline-base.cmd` | preserved previous statusline command (optional) |
 | `~/.claude/scripts/usage-monitor-cache.json` | cached API response |
 | `~/.claude/scripts/usage-monitor-state.json` | notification state |
+| `~/.claude/scripts/usage-monitor.lock` | state-update lock (exists only while a check runs) |
 | `~/.claude/scripts/compact-advisor-state.json` | compact-signal anti-spam state |
 | `~/.claude/scripts/.limit-alerts-options` | options chosen at install time |
 | `~/Library/LaunchAgents/com.claude.usage-monitor.plist` | background agent |

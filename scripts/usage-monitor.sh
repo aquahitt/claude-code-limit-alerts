@@ -36,9 +36,19 @@ LANG_UM="${UM_LANG:-ru}"
 # materialised, so an unset CLAUDE_PLUGIN_OPTION_* is the normal case and the
 # script's own default has to carry it. These lines sit AFTER the assignments
 # above on purpose — install.sh rewrites those literals with sed.
-[ -n "${CLAUDE_PLUGIN_OPTION_LANG:-}" ] && LANG_UM="${UM_LANG:-$CLAUDE_PLUGIN_OPTION_LANG}"
-[ -n "${CLAUDE_PLUGIN_OPTION_WARN:-}" ] && WARN="${UM_WARN:-$CLAUDE_PLUGIN_OPTION_WARN}"
-[ -n "${CLAUDE_PLUGIN_OPTION_CRIT:-}" ] && CRIT="${UM_CRIT:-$CLAUDE_PLUGIN_OPTION_CRIT}"
+# CLAUDE_PLUGIN_OPTION_* are generic names that, like CLAUDE_PLUGIN_DATA,
+# leak from whichever plugin owns the running hook. They are honoured only
+# when this very file is the copy inside the limit-alerts plugin, so another
+# plugin's LANG/WARN/... can never reconfigure (or switch off) a classic
+# install. A leaked CLAUDE_PLUGIN_ROOT points at that other plugin and does not
+# match.
+FROM_PLUGIN=0
+case "${BASH_SOURCE[0]}" in "${CLAUDE_PLUGIN_ROOT:-/nonexistent}"/*) FROM_PLUGIN=1 ;; esac
+if [ "$FROM_PLUGIN" = "1" ]; then
+  [ -n "${CLAUDE_PLUGIN_OPTION_LANG:-}" ] && LANG_UM="${UM_LANG:-$CLAUDE_PLUGIN_OPTION_LANG}"
+  [ -n "${CLAUDE_PLUGIN_OPTION_WARN:-}" ] && WARN="${UM_WARN:-$CLAUDE_PLUGIN_OPTION_WARN}"
+  [ -n "${CLAUDE_PLUGIN_OPTION_CRIT:-}" ] && CRIT="${UM_CRIT:-$CLAUDE_PLUGIN_OPTION_CRIT}"
+fi
 
 # Resolution order: an explicit override, then the directory install.sh
 # creates. In plugin mode hooks.json and the generated wrappers always pass
@@ -280,11 +290,15 @@ fi
 if [ "$MODE" = "status" ]; then
   # install.sh writes .limit-alerts-version into the state directory; in plugin
   # mode nobody does, and VERSION at the plugin root is the source of truth.
+  # It is found relative to this file rather than through CLAUDE_PLUGIN_ROOT:
+  # the status skill runs this from a plain shell, where that variable is only
+  # substituted into the command text, never exported.
   VERSION_FILE=""
+  PLUGIN_VERSION="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." 2>/dev/null && pwd)/VERSION"
   if   [ -f "$DIR/.limit-alerts-version" ]; then
     VERSION_FILE="$DIR/.limit-alerts-version"
-  elif [ -f "${CLAUDE_PLUGIN_ROOT:-/nonexistent}/VERSION" ]; then
-    VERSION_FILE="$CLAUDE_PLUGIN_ROOT/VERSION"
+  elif [ -f "$PLUGIN_VERSION" ] && [ -f "$(dirname "$PLUGIN_VERSION")/.claude-plugin/plugin.json" ]; then
+    VERSION_FILE="$PLUGIN_VERSION"
   fi
   if [ -n "$VERSION_FILE" ]; then
     printf 'claude-code-limit-alerts v%s\n' "$(cat "$VERSION_FILE")"
@@ -300,6 +314,28 @@ if [ "$MODE" = "status" ]; then
   done <<< "$LIMITS"
   exit 0
 fi
+
+# One state update at a time. The Stop hook, SessionStart and the launchd job
+# can run at the same moment — a freshly loaded agent's RunAtLoad fires right
+# as the session's own SessionStart check does. Without a lock both read the
+# same state, both see a threshold as new, and the warning arrives twice. A run
+# that cannot get the lock just leaves: the holder is reporting the same news.
+LOCK="$DIR/usage-monitor.lock"
+acquire_lock() {
+  local _
+  for _ in $(seq 1 50); do
+    mkdir "$LOCK" 2>/dev/null && return 0
+    # A lock older than a minute was left by a run that got killed.
+    if [ -n "$(find "$LOCK" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+      rmdir "$LOCK" 2>/dev/null || true
+      continue
+    fi
+    sleep 0.1
+  done
+  return 1
+}
+acquire_lock || exit 0
+trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
 
 [ -f "$STATE" ] || echo '{}' > "$STATE"
 MESSAGES=()
