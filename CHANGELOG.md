@@ -7,12 +7,11 @@
 ### Added
 
 - Экспериментальный mod `mods/limit-alerts-status/` — отдельный плагин на
-  TypeScript-хуках Claude Code. Показывает лимиты в строке статуса плагина
-  (`$.ui.status`), не трогая `statusLine` в `~/.claude/settings.json`. Берёт
-  свежий `usage-monitor-cache.json`, а без него — проценты 5ч/7д, которые
-  Claude Code сам получает из ответов API. В плагин `limit-alerts` и в
-  marketplace не входит: API модов пока в early access. Запуск:
-  `claude --plugin-dir mods/limit-alerts-status`.
+  TypeScript-хуках Claude Code с командой `/limits`: сводка по всем окнам,
+  времени сброса и источнику данных печатается сразу, без хода модели и без
+  токенов, в том числе посреди хода. Показывает и паузу монитора после ответа
+  429. В плагин `limit-alerts` и в marketplace не входит: API модов пока в
+  early access. Запуск: `claude --plugin-dir mods/limit-alerts-status`.
 
 ## [0.8.0] - 2026-10-10
 

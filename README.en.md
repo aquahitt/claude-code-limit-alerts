@@ -289,29 +289,26 @@ The classic install:
 Unloads the launchd agent, removes the hooks from settings, restores your
 previous statusline, and deletes the scripts.
 
-## Experimental: a status-line mod
+## Experimental: a mod with a `/limits` command
 
 `mods/limit-alerts-status/` holds a separate plugin of Claude Code TypeScript
-hooks (a mod). It shows the limits in the plugin status line under the prompt
-and **does not touch** `statusLine` in `~/.claude/settings.json`: no backups,
-no wrappers.
+hooks (a mod). It adds a `/limits` command that prints a summary at once —
+**no model turn, no tokens**, unlike the `limit-alerts:status` skill, which
+answers through the model. It also works mid-turn.
 
 ```
-5h 62% · 7d 9% · wk Fable 4%
+Claude Code limits
+⚠ Session (5h): 87% — resets 15:19 (in 2 h 50 min)
+⚠ Week (all models): 90% — resets 15.10 19:59 (in 5 d 7 h)
+Week (Fable): 4%
+Source: this session's last API response. The model-scoped weekly limit comes from the monitor's cache (5 min ago).
 ```
 
-There are no colors — the line is plain text — so severity is a leading mark:
-`⚠` from the warning threshold, `⛔` from the critical one.
-
-Where the numbers come from, in order:
-
-1. A fresh `usage-monitor-cache.json` (under 15 minutes old) — from
-   `UM_STATE_DIR`, `~/.claude/scripts`, or the `limit-alerts` plugin's data
-   directory.
-2. Otherwise the 5h/7d percentages Claude Code itself gets from API responses.
-   This works even without the monitor, but lacks the model-scoped weekly
-   limit.
-3. Otherwise a stale cache marked with its age: `(2h ago)`.
+The 5h and 7d percentages come from this session's last API response, and
+before the first one from `usage-monitor-cache.json` (from `UM_STATE_DIR`,
+`~/.claude/scripts`, or the `limit-alerts` plugin's data directory). The
+model-scoped weekly limit always comes from the cache. If the monitor is
+backing off after an HTTP 429, the summary says so.
 
 To run it:
 
@@ -321,8 +318,7 @@ claude --plugin-dir mods/limit-alerts-status
 
 Its options (`lang`, `warn`, `crit`, `state_dir`) show up in the config menu.
 The mod is not part of the `limit-alerts` plugin or the marketplace: the mod
-API is still early access and may change between Claude Code versions. If this
-project's statusline is enabled too, the limits show up twice.
+API is still early access and may change between Claude Code versions.
 
 ## FAQ
 

@@ -98,12 +98,18 @@ from the same files with no copy.
 
 - `mods/limit-alerts-status/` — a separate plugin of TypeScript function hooks
   (a Claude Code "mod"), not part of the `limit-alerts` plugin and not listed
-  in `marketplace.json`. It shows the limits via `$.ui.status` instead of
-  writing `statusLine` into `settings.json`: a fresh
-  `usage-monitor-cache.json` first (same directory chain as the bash scripts,
-  then `~/.claude/plugins/data/limit-alerts-*`), else the engine's own
-  `$.session.usage().rateLimits` (5h/7d only, no scoped weekly limit), else a
-  stale cache marked with its age.
+  in `marketplace.json`. It registers one command, `/limits` (`immediate`),
+  answered by a `command.run` hook with `{ text }` — no model turn, no tokens.
+  5h/7d come from `$.session.usage().rateLimits`, else the monitor's cache
+  (same directory chain as the bash scripts, then
+  `~/.claude/plugins/data/limit-alerts-*`); the scoped weekly limit always
+  from the cache; the 429 backoff from `usage-monitor-backoff.json`. Local
+  time comes from the host's `date +%z` — the worker's own zone is not to be
+  trusted.
+- It used to pin a permanent `$.ui.status` row. Dropped on purpose: the engine
+  styles that row as a notice (yellow `▲`, plugin-name prefix, no colour API),
+  and since 0.7.0 the statusline shows the same live numbers in colour. Don't
+  bring the row back as a duplicate.
 - The mod API is early access and changes between Claude Code releases —
   that is why it stays out of the shipped plugin. Load it with
   `claude --plugin-dir mods/limit-alerts-status`; check it with
