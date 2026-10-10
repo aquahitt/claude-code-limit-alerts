@@ -126,6 +126,11 @@ export const register: Register = (on, options) => {
   on('session.start', async ($, e, next) => {
     const result = await next(e)
 
+    // Versions up to 0.1.0 pinned a status row. A pinned row is the host's and
+    // survives a reload of this module, so clear it, or the last numbers the
+    // old version drew stay on screen, frozen.
+    $.ui.status(undefined)
+
     // immediate: the report reads no turn state, so it may run mid-turn
     // instead of queueing behind it.
     await $.command.register({
