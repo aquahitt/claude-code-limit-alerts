@@ -1,7 +1,7 @@
 {
   "name": "limit-alerts",
   "displayName": "Claude Code limit alerts",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "description": "Warns before a Claude subscription usage limit runs out: hook messages, macOS notifications, a limits-aware statusline and a /compact advisor.",
   "author": {
     "name": "Alexey Romanovsky",
