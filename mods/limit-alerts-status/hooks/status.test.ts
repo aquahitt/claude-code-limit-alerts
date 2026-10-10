@@ -72,6 +72,7 @@ const DIR = `${HOME}/.claude/scripts`
 
 function world(on: On, files: Record<string, { text: string; mtimeMs: number }>, rateLimits: SessionRateLimit[]) {
   const registered: string[] = []
+  const statuses: (string | undefined)[] = []
   mock.env(on, { HOME })
   mock.clock(on, { now: NOW })
   on('fs.read', (_$, e) => (files[e.path] ? { value: files[e.path]!.text } : { deny: `ENOENT: ${e.path}` }))
@@ -90,7 +91,11 @@ function world(on: On, files: Record<string, { text: string; mtimeMs: number }>,
     return { value: { command: e.name } }
   })
   on('command.run', () => ({ text: 'engine' }))
-  return { registered }
+  on('ui.status', (_$, e) => {
+    statuses.push(e.text)
+    return { value: undefined }
+  })
+  return { registered, statuses }
 }
 
 const START = { cwd: '/', surface: 'terminal' as const, isInteractive: true }
@@ -106,12 +111,14 @@ describe('mod', () => {
       [`${DIR}/usage-monitor-cache.json`]: { text: cache, mtimeMs: NOW - 5 * 60_000 },
       [`${DIR}/usage-monitor-backoff.json`]: { text: JSON.stringify({ until: NOW_S + 900 }), mtimeMs: NOW },
     }
-    const { registered } = world(on, files, [
+    const { registered, statuses } = world(on, files, [
       { kind: 'five_hour', percentUsed: 16, resetsAt: new Date(NOW + 3600_000).toISOString() },
       { kind: 'seven_day', percentUsed: 53 },
     ])
     await $.session.start(START)
     expect(registered).toEqual(['limits'])
+    // a row pinned by an older version is cleared, and nothing new is pinned
+    expect(statuses).toEqual([undefined])
 
     const { text } = await $.command.run(RUN)
     expect(text).toBe([
