@@ -151,11 +151,18 @@ backoff_active() {
 backoff_start() { # $1 = Retry-After value from the response, may be empty
   local prev delay
   prev=$("$JQ" -r '.delay // 0' "$BACKOFF" 2>/dev/null || echo 0)
+  # The usage endpoint answers its 429s with "Retry-After: 0" (seen 34 times
+  # in a row on a live install), and taken literally that meant a one-minute
+  # pause that never grew — the monitor kept the rate limit alive. Claude
+  # Code's own client treats a non-positive Retry-After as absent and waits
+  # its default; so does this. Absent, zero or an HTTP-date: double from 5 min.
   case "$1" in
-    ''|*[!0-9]*)  # absent, or an HTTP-date: fall back to doubling
-      if [ "$prev" -gt 0 ] 2>/dev/null; then delay=$(( prev * 2 )); else delay=$BACKOFF_FIRST; fi ;;
-    *) delay="$1" ;;
+    ''|*[!0-9]*) delay="" ;;
+    *) delay="$1"; [ "$delay" -gt 0 ] || delay="" ;;
   esac
+  if [ -z "$delay" ]; then
+    if [ "$prev" -gt 0 ] 2>/dev/null; then delay=$(( prev * 2 )); else delay=$BACKOFF_FIRST; fi
+  fi
   [ "$delay" -lt 60 ] && delay=60
   [ "$delay" -gt "$BACKOFF_MAX" ] && delay=$BACKOFF_MAX
   "$JQ" -n --argjson u "$(( $(date +%s) + delay ))" --argjson d "$delay" \
@@ -316,10 +323,10 @@ fetch_usage() {
            log_fetch_fail "live endpoint returned HTTP 401 (token likely expired — the CLI refresh renews it; pausing live requests for $(( delay / 60 )) min)"
            try_cli=1 ;;
       403) delay=$(backoff_start "$retry_after")
-           log_fetch_fail "live endpoint returned HTTP 403 (refused — pausing live requests for $(( delay / 60 )) min${retry_after:+, Retry-After: $retry_after})"
+           log_fetch_fail "live endpoint returned HTTP 403 (refused — pausing live requests for $(( delay / 60 )) min${retry_after:+, server Retry-After: $retry_after})"
            try_cli=1 ;;
       429) delay=$(backoff_start "$retry_after")
-           log_fetch_fail "live endpoint returned HTTP 429 (rate limited — pausing live requests for $(( delay / 60 )) min${retry_after:+, Retry-After: $retry_after})" ;;
+           log_fetch_fail "live endpoint returned HTTP 429 (rate limited — pausing live requests for $(( delay / 60 )) min${retry_after:+, server Retry-After: $retry_after})" ;;
       *)   log_fetch_fail "live endpoint returned HTTP ${http_code:-?}"
            try_cli=1 ;;
     esac

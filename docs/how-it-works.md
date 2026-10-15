@@ -186,8 +186,11 @@ retired. Without an OAuth sign-in nothing is tagged, as before.
 ### Rate limiting / Ограничение частоты
 
 When the usage endpoint answers **429, 403 or 401**, live requests pause: for
-`Retry-After` seconds when the server sends a number, otherwise for 5 minutes,
-doubling on each further refusal, capped at an hour. 403 is treated like 429
+`Retry-After` seconds when the server sends a positive number, otherwise for 5
+minutes, doubling on each further refusal, capped at an hour. The endpoint in
+practice answers its 429s with `Retry-After: 0`; like Claude Code's own
+client, a non-positive value counts as absent — taken literally it meant a
+one-minute pause that never grew and kept the rate limit alive. 403 is treated like 429
 because Claude Code's own client does the same; it has also been seen as a
 standing answer for some Team/organization tokens, and without the pause the
 92-second agent would ask, and spawn a CLI refresh, on every tick. On a 401 or
