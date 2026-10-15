@@ -74,7 +74,9 @@ If live data can't be fetched (for example, the endpoint answers 429),
   last API response, or the account-wide one the monitor fetched — so the line
   also reflects work in other terminals, on other devices, on claude.ai, even
   while this terminal just sits open. The statusline refreshes a stale cache
-  itself, in the background, without delaying the redraw. Once a window
+  itself, in the background, without delaying the redraw. Several open
+  terminals — idle or working — show the same, freshest number and share a
+  single request. Once a window
   reaches the warning threshold, its reset time appears next to it:
   `5h 84% ↻00:20`.
 - No spam: one notification per threshold (80% and 95%) per window; a reset is

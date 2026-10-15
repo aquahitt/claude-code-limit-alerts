@@ -86,7 +86,9 @@ from the same files with no copy.
   (`pick_window`: later reset wins, same window → higher percent; usage only
   grows within a window), and why the statusline starts a detached
   `usage-monitor.sh hook` when the cache is stale. Never go back to "stdin
-  always wins".
+  always wins". Sessions share their freshest stdin reading through
+  `usage-monitor-observed` (mkdir lock + retry), and a live request runs
+  under `usage-monitor.fetch.lock` so concurrent callers share one request.
 - **Every hook script exits at once on `UM_INTERNAL=1`.** `usage-monitor.sh`
   sets it on its headless `claude -p /usage` refresh, which fires this
   project's own hooks; without the early exit each refresh made one more

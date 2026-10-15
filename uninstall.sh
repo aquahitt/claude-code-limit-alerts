@@ -65,6 +65,7 @@ rm -f "$SCRIPTS_DIR/usage-monitor.sh" \
       "$SCRIPTS_DIR/usage-monitor-backoff.json" \
       "$SCRIPTS_DIR/usage-monitor-cli-refresh" \
       "$SCRIPTS_DIR/usage-monitor-sl-refresh" \
+      "$SCRIPTS_DIR/usage-monitor-observed" \
       "$SCRIPTS_DIR/auto-resume-state.json" \
       "$SCRIPTS_DIR/compact-advisor-state.json" \
       "$SCRIPTS_DIR/.limit-alerts-version" \
@@ -72,6 +73,7 @@ rm -f "$SCRIPTS_DIR/usage-monitor.sh" \
 rm -f "$SCRIPTS_DIR"/auto-resume-*.lock
 # usage-monitor.lock is a directory, and normally exists only while a check
 # runs; a run killed mid-update can leave it behind.
-rmdir "$SCRIPTS_DIR/usage-monitor.lock" 2>/dev/null || true
+rmdir "$SCRIPTS_DIR/usage-monitor.lock" "$SCRIPTS_DIR/usage-monitor.fetch.lock" \
+      "$SCRIPTS_DIR/usage-monitor-observed.lock" 2>/dev/null || true
 
 echo "Done. Restart Claude Code to apply."

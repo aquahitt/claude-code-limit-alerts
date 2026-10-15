@@ -197,6 +197,27 @@ refresh_via_cli() {
   log_note "refreshed local usage cache via 'claude -p /usage'"
 }
 
+# One live request at a time across every caller — the agent, the Stop hooks
+# of several working terminals, the background refreshes started by several
+# idle statuslines. Whoever takes the lock asks the endpoint; whoever finds it
+# taken waits (up to 12 s, above curl's 10 s) and then reads what the holder
+# cached, instead of sending a duplicate request. A lock older than a minute
+# was left by a killed run.
+FETCH_LOCK="$DIR/usage-monitor.fetch.lock"
+acquire_fetch_lock() {
+  mkdir "$FETCH_LOCK" 2>/dev/null && return 0
+  if [ -n "$(find "$FETCH_LOCK" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+    rmdir "$FETCH_LOCK" 2>/dev/null || true
+    mkdir "$FETCH_LOCK" 2>/dev/null && return 0
+  fi
+  local _
+  for _ in $(seq 1 120); do
+    [ -d "$FETCH_LOCK" ] || break
+    sleep 0.1
+  done
+  return 1
+}
+
 fetch_usage() {
   # cache keeps the Stop hook from hitting the API on every turn
   if [ -f "$CACHE" ]; then
@@ -209,11 +230,19 @@ fetch_usage() {
   local token
   token=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null \
     | "$JQ" -r '.claudeAiOauth.accessToken // empty')
-  local resp http_code headers retry_after delay try_cli=0
+  local resp http_code headers retry_after delay try_cli=0 fetch_started
+  fetch_started=$(date +%s)
   if backoff_active; then
     # Rate limited a moment ago: no live request and no CLI refresh (it asks
     # the same endpoint). Only the local fallback below, which costs nothing.
     [ "$MODE" = "cron" ] && log_fetch_fail "rate limited, live requests paused until $(date -r "$(backoff_until)" '+%H:%M')"
+  elif [ -n "$token" ] && ! acquire_fetch_lock; then
+    # Another check fetched meanwhile: its answer is in the cache, or it failed
+    # (then only the local fallback below — never a second request).
+    if [ "$(stat -f %m "$CACHE" 2>/dev/null || echo 0)" -ge "$fetch_started" ]; then
+      cat "$CACHE"
+      return 0
+    fi
   elif [ -n "$token" ]; then
     headers=$(mktemp "$DIR/.usage-headers.XXXXXX" 2>/dev/null) || headers=/dev/null
     resp=$(curl -sS --max-time 10 -D "$headers" -w '\n%{http_code}' https://api.anthropic.com/api/oauth/usage \
@@ -226,9 +255,12 @@ fetch_usage() {
     if [ "$http_code" = "200" ] && echo "$resp" | "$JQ" -e '.limits' >/dev/null 2>&1; then
       backoff_clear
       echo "$resp" > "$CACHE"
+      # Released only once the cache holds the answer the waiters will read.
+      rmdir "$FETCH_LOCK" 2>/dev/null || true
       echo "$resp"
       return 0
     fi
+    rmdir "$FETCH_LOCK" 2>/dev/null || true
     # The reason matters for diagnosis: 401/403 point at the token, 429 only
     # means too many requests in a short window (hooks, cron and `status`
     # together can get there) and clears up on its own.

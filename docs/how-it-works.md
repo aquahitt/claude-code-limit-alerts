@@ -96,6 +96,12 @@ don't happen to have it in their environment.
   stamp spaces spawns at least 30 s apart. With the launchd agent on, the
   cache rarely gets that old; with it off (the plugin's default), this is what
   refreshes it. `UM_STATUSLINE_BG_REFRESH=0` turns it off.
+  Several sessions working at once each see their own last API response, so
+  their stdin readings differ by what was spent in between. A shared file,
+  `usage-monitor-observed`, keeps the freshest reading any of them has seen:
+  every redraw merges its stdin into it (same rule, under a mkdir lock with a
+  short retry, written via temp file + mv) and draws from the merged value, so
+  all terminals show one number within a redraw.
   A window at or above `UM_WARN` gets its reset time, dim, after the percent
   (`↻HH:MM` within a day, `↻DD.MM` beyond); below the threshold the line stays
   short. `UM_STATUSLINE_RESET=0` turns it off.
@@ -137,6 +143,12 @@ On every check, for each limit:
    once per window.
 
 Multiple messages from one check are combined into a single notification.
+
+A live request also runs under its own lock (`usage-monitor.fetch.lock`):
+the agent, the Stop hooks of several working terminals and the background
+refreshes of several idle statuslines may all decide to fetch at once. The
+first takes the lock and asks; the rest wait for it (up to 12 s, above curl's
+10 s) and read what it cached — one request instead of one per caller.
 
 The read-modify-write of the state file runs under a lock (`usage-monitor.lock`,
 a directory in the state directory). The Stop hook, `SessionStart` and the
@@ -434,6 +446,7 @@ anti-spam state, duplicating every notification.
 | `~/.claude/scripts/usage-monitor-backoff.json` | pause after HTTP 401/403/429 (exists only while one runs) |
 | `~/.claude/scripts/usage-monitor-cli-refresh` | stamp: last `claude -p /usage` refresh (at most one per 5 min) |
 | `~/.claude/scripts/usage-monitor-sl-refresh` | stamp: last background refresh started by the statusline |
+| `~/.claude/scripts/usage-monitor-observed` | freshest stdin reading seen by any session, shared by all statuslines |
 | `~/.claude/scripts/usage-monitor.lock` | state-update lock (exists only while a check runs) |
 | `~/.claude/scripts/compact-advisor-state.json` | compact-signal anti-spam state |
 | `~/.claude/scripts/.limit-alerts-options` | options chosen at install time |
