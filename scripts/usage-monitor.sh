@@ -91,7 +91,7 @@ log_note() {
 }
 log_fetch_fail() { log_note "fetch failed: $1"; } # silent fetch failures used to leave no trace at all
 
-# Backoff after HTTP 429. Without it every hook (past the 60 s cache) and every
+# Backoff after HTTP 401, 403 or 429. Without it every hook (past the 60 s cache) and every
 # cron tick asks again, which keeps the rate limit alive. The pause follows
 # Retry-After when the server sends a number of seconds, and otherwise doubles
 # from 5 minutes, capped at an hour. A successful fetch clears it.
@@ -197,7 +197,7 @@ fetch_usage() {
   local token
   token=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null \
     | "$JQ" -r '.claudeAiOauth.accessToken // empty')
-  local resp http_code headers retry_after delay
+  local resp http_code headers retry_after delay try_cli=0
   if backoff_active; then
     # Rate limited a moment ago: no live request and no CLI refresh (it asks
     # the same endpoint). Only the local fallback below, which costs nothing.
@@ -220,23 +220,36 @@ fetch_usage() {
     # The reason matters for diagnosis: 401/403 point at the token, 429 only
     # means too many requests in a short window (hooks, cron and `status`
     # together can get there) and clears up on its own.
+    # 401 and 403 pause like 429 — Claude Code's own client treats 403 and 429
+    # as "rate limited" and stops asking, and a 401 does not heal by asking
+    # again: the CLI refresh below renews the token. Without the pause, an account that the
+    # endpoint keeps refusing (seen with Team/organization tokens) would be
+    # asked again, and a headless `claude -p /usage` spawned, on every agent
+    # tick. The CLI refresh still gets one try when a 403 pause starts: the
+    # CLI's own request may be served where this script's is not.
     case "$http_code" in
-      401|403) log_fetch_fail "live endpoint returned HTTP $http_code (token likely expired/invalid — refreshes only while Claude Code is active)" ;;
-      429)     delay=$(backoff_start "$retry_after")
-               log_fetch_fail "live endpoint returned HTTP 429 (rate limited — pausing live requests for $(( delay / 60 )) min${retry_after:+, Retry-After: $retry_after})" ;;
-      *)       log_fetch_fail "live endpoint returned HTTP ${http_code:-?}" ;;
+      401) delay=$(backoff_start "$retry_after")
+           log_fetch_fail "live endpoint returned HTTP 401 (token likely expired — the CLI refresh renews it; pausing live requests for $(( delay / 60 )) min)"
+           try_cli=1 ;;
+      403) delay=$(backoff_start "$retry_after")
+           log_fetch_fail "live endpoint returned HTTP 403 (refused — pausing live requests for $(( delay / 60 )) min${retry_after:+, Retry-After: $retry_after})"
+           try_cli=1 ;;
+      429) delay=$(backoff_start "$retry_after")
+           log_fetch_fail "live endpoint returned HTTP 429 (rate limited — pausing live requests for $(( delay / 60 )) min${retry_after:+, Retry-After: $retry_after})" ;;
+      *)   log_fetch_fail "live endpoint returned HTTP ${http_code:-?}"
+           try_cli=1 ;;
     esac
   else
     log_fetch_fail "no OAuth token in keychain"
+    try_cli=1
   fi
-  # Team/organization OAuth tokens get a 403 from the live endpoint (seen
-  # with subscriptionType "team" — a client-fingerprint gate on Anthropic's
-  # side, not something fixable with headers/tokens from a plain script). A
-  # personal token can also 401 here if it expired while Claude Code wasn't
-  # running to refresh it. Either way, try to force a fresh local read via
-  # the CLI itself before falling back to whatever's already cached — only
-  # from cron/status, never from hook (see refresh_via_cli comment).
-  if { [ "$MODE" = "cron" ] || [ "$MODE" = "status" ]; } && ! backoff_active; then
+  # Team/organization OAuth tokens have been seen getting a 403 here, and a
+  # personal token can 401 if it expired while Claude Code wasn't running to
+  # refresh it. Either way, try to force a fresh local read via the CLI itself
+  # before falling back to whatever's already cached — only from cron/status,
+  # never from hook (see refresh_via_cli comment), and never on a 429 or
+  # inside a pause: the CLI would ask the same endpoint.
+  if { [ "$MODE" = "cron" ] || [ "$MODE" = "status" ]; } && [ "$try_cli" = "1" ]; then
     refresh_via_cli
   fi
   # Fall back to the same data Claude Code's own /usage command already
