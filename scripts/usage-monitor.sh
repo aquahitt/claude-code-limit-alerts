@@ -70,6 +70,44 @@ CACHE="$DIR/usage-monitor-cache.json"
 JQ="$(command -v jq || echo /opt/homebrew/bin/jq)"
 [ -x "$JQ" ] || exit 0
 
+# Whose numbers these are. One machine can sign in to several accounts in
+# turn, and one person can be in several organizations (a personal plan and a
+# Team seat) with separate limits — so the key is account + organization, as
+# ~/.claude.json names the current sign-in. The cache and the backoff carry
+# it, and the anti-spam state and the pause after an error are kept per
+# account (files named after ACCOUNT_KEY): without that, switching
+# accounts read as a window reset ("♻️ 67% → 37%") and re-armed the warnings.
+# Empty when there is no OAuth sign-in: then nothing is tagged, as before.
+ACCOUNT=$("$JQ" -r '.oauthAccount // {} | select(.accountUuid != null)
+  | "\(.accountUuid):\(.organizationUuid // "")"' "$HOME/.claude.json" 2>/dev/null)
+ACCOUNT_KEY=$(printf '%s' "$ACCOUNT" | awk -F: 'NF { print substr($1, 1, 8) "-" substr($2, 1, 8) }')
+if [ -n "$ACCOUNT_KEY" ]; then
+  STATE="$DIR/usage-monitor-state.$ACCOUNT_KEY.json"
+  # One-time move from the single shared state of <= 0.9.0: seed the first
+  # account seen from it, then retire it so another account starts clean.
+  if [ ! -f "$STATE" ] && [ -f "$DIR/usage-monitor-state.json" ]; then
+    mv "$DIR/usage-monitor-state.json" "$STATE" 2>/dev/null || true
+  fi
+fi
+
+# The cache file is shared, so it is trusted only for the account it was
+# fetched for. A cache from <= 0.9.0 has no tag and counts as the current
+# account's once, until the next fetch tags it.
+cache_is_mine() {
+  [ -f "$CACHE" ] || return 1
+  [ -n "$ACCOUNT" ] || return 0
+  "$JQ" -e --arg a "$ACCOUNT" '(._account // $a) == $a' "$CACHE" >/dev/null 2>&1
+}
+
+write_cache() { # $1 = response JSON
+  if [ -n "$ACCOUNT" ]; then
+    printf '%s' "$1" | "$JQ" -c --arg a "$ACCOUNT" '. + {_account: $a}' > "$CACHE" 2>/dev/null \
+      || printf '%s\n' "$1" > "$CACHE"
+  else
+    printf '%s\n' "$1" > "$CACHE"
+  fi
+}
+
 LOG="$DIR/usage-monitor.log"
 LOG_MAX_BYTES=$((1024 * 1024)) # 1MB
 LOG_KEEP_LINES=2000
@@ -95,7 +133,9 @@ log_fetch_fail() { log_note "fetch failed: $1"; } # silent fetch failures used t
 # cron tick asks again, which keeps the rate limit alive. The pause follows
 # Retry-After when the server sends a number of seconds, and otherwise doubles
 # from 5 minutes, capped at an hour. A successful fetch clears it.
-BACKOFF="$DIR/usage-monitor-backoff.json"
+# One pause per account, like the state: another account has its own token
+# and limits, and its successful fetch must not lift this account's pause.
+BACKOFF="$DIR/usage-monitor-backoff${ACCOUNT_KEY:+.$ACCOUNT_KEY}.json"
 BACKOFF_FIRST=300
 BACKOFF_MAX=3600
 
@@ -220,7 +260,7 @@ acquire_fetch_lock() {
 
 fetch_usage() {
   # cache keeps the Stop hook from hitting the API on every turn
-  if [ -f "$CACHE" ]; then
+  if cache_is_mine; then
     local age=$(( $(date +%s) - $(stat -f %m "$CACHE" 2>/dev/null || echo 0) ))
     if [ "$age" -lt "$CACHE_TTL" ] && [ "$MODE" != "cron" ]; then
       cat "$CACHE"
@@ -239,7 +279,7 @@ fetch_usage() {
   elif [ -n "$token" ] && ! acquire_fetch_lock; then
     # Another check fetched meanwhile: its answer is in the cache, or it failed
     # (then only the local fallback below — never a second request).
-    if [ "$(stat -f %m "$CACHE" 2>/dev/null || echo 0)" -ge "$fetch_started" ]; then
+    if cache_is_mine && [ "$(stat -f %m "$CACHE" 2>/dev/null || echo 0)" -ge "$fetch_started" ]; then
       cat "$CACHE"
       return 0
     fi
@@ -254,7 +294,7 @@ fetch_usage() {
     [ "$headers" != /dev/null ] && rm -f "$headers"
     if [ "$http_code" = "200" ] && echo "$resp" | "$JQ" -e '.limits' >/dev/null 2>&1; then
       backoff_clear
-      echo "$resp" > "$CACHE"
+      write_cache "$resp"
       # Released only once the cache holds the answer the waiters will read.
       rmdir "$FETCH_LOCK" 2>/dev/null || true
       echo "$resp"
@@ -306,9 +346,14 @@ fetch_usage() {
     return 1
   fi
   local util fetched_ms age
-  util=$("$JQ" -c '.cachedUsageUtilization // empty' "$claude_json" 2>/dev/null)
+  # Claude Code stamps this with the accountUuid it was fetched for and drops
+  # it when that is not the signed-in account; an entry without the stamp, or
+  # with another account's, is not ours either.
+  util=$("$JQ" -c '(.oauthAccount.accountUuid // null) as $me
+    | .cachedUsageUtilization // empty
+    | select($me == null or .accountUuid == $me)' "$claude_json" 2>/dev/null)
   if [ -z "$util" ] || [ "$util" = "null" ]; then
-    log_fetch_fail "fallback unavailable: no cachedUsageUtilization in ~/.claude.json"
+    log_fetch_fail "fallback unavailable: no cachedUsageUtilization for this account in ~/.claude.json"
     return 1
   fi
   fetched_ms=$(echo "$util" | "$JQ" -r '.fetchedAtMs // 0')
@@ -322,7 +367,7 @@ fetch_usage() {
     log_fetch_fail "fallback malformed: cachedUsageUtilization has no .limits"
     return 1
   fi
-  echo "$resp" > "$CACHE"
+  write_cache "$resp"
   echo "$resp"
 }
 
@@ -413,7 +458,7 @@ fi
 
 if ! USAGE=$(fetch_usage); then
   [ "$MODE" = "status" ] || exit 0
-  if [ -s "$CACHE" ] && "$JQ" -e '.limits' "$CACHE" >/dev/null 2>&1; then
+  if cache_is_mine && [ -s "$CACHE" ] && "$JQ" -e '.limits' "$CACHE" >/dev/null 2>&1; then
     USAGE=$(cat "$CACHE")
     cache_mtime=$(stat -f %m "$CACHE" 2>/dev/null || echo 0)
     age_min=$(( ($(date +%s) - cache_mtime) / 60 ))

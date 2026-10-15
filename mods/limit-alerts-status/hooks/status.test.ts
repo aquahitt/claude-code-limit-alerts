@@ -164,6 +164,22 @@ describe('mod', () => {
     expect(text).toContain('Источник: Сессия (5ч) — кэш монитора (1 мин назад), Неделя (все модели) — ответ API этой сессии.')
   })
 
+  test("ignores another account's cache after switching accounts", async ($, on) => {
+    const cache = JSON.stringify({
+      _account: 'other-account:other-org', five_hour: { utilization: 61 }, seven_day: { utilization: 9 },
+    })
+    world(on, {
+      [`${DIR}/usage-monitor-cache.json`]: { text: cache, mtimeMs: NOW - 60_000 },
+      [`${HOME}/.claude.json`]: {
+        text: JSON.stringify({ oauthAccount: { accountUuid: 'me', organizationUuid: 'my-org' } }), mtimeMs: NOW,
+      },
+    }, [])
+    await $.session.start(START)
+    const { text } = await $.command.run(RUN)
+    expect(text).not.toContain('61%')
+    expect(text).toContain('Нет данных о лимитах')
+  })
+
   test('falls back to the cache before the session has talked to the API', async ($, on) => {
     const cache = JSON.stringify({ five_hour: { utilization: 61 }, seven_day: { utilization: 9 } })
     world(on, { [`${DIR}/usage-monitor-cache.json`]: { text: cache, mtimeMs: NOW - 2 * 60_000 } }, [])

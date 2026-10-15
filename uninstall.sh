@@ -71,6 +71,9 @@ rm -f "$SCRIPTS_DIR/usage-monitor.sh" \
       "$SCRIPTS_DIR/.limit-alerts-version" \
       "$SCRIPTS_DIR/.limit-alerts-options"
 rm -f "$SCRIPTS_DIR"/auto-resume-*.lock
+# Per-account files (0.9.1+): state and pause, one pair per signed-in account,
+# and the state file of <= 0.9.0 if it was retired by hand.
+rm -f "$SCRIPTS_DIR"/usage-monitor-state.*.json "$SCRIPTS_DIR"/usage-monitor-backoff.*.json
 # usage-monitor.lock is a directory, and normally exists only while a check
 # runs; a run killed mid-update can leave it behind.
 rmdir "$SCRIPTS_DIR/usage-monitor.lock" "$SCRIPTS_DIR/usage-monitor.fetch.lock" \
