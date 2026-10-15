@@ -7,8 +7,9 @@ export type Lang = 'ru' | 'en'
 
 export type Thresholds = { warn: number; crit: number }
 
-// resetsAt is epoch seconds, as the statusline's stdin carries it.
-export type Window = { percent: number; resetsAt?: number }
+// resetsAt is epoch seconds, as the statusline's stdin carries it. `from`
+// says which source a window in the report came from.
+export type Window = { percent: number; resetsAt?: number; from?: 'session' | 'cache' }
 
 export type Reading = {
   five?: Window
@@ -21,8 +22,6 @@ export type Report = {
   five?: Window
   seven?: Window
   scoped?: Window & { model: string }
-  // Where five/seven came from: this session's last API response, or the cache.
-  source: 'session' | 'cache' | 'none'
   cacheAgeMs?: number
   // usage-monitor.sh's pause after an HTTP 429, epoch seconds.
   pausedUntil?: number
@@ -74,6 +73,28 @@ export function fromRateLimits(limits: readonly SessionRateLimit[]): Reading {
   return { five: pick('five_hour'), seven: pick('seven_day') }
 }
 
+// The fresher of two readings of one window, as the statusline decides it:
+// this session's last API response is current while the session works and
+// frozen while it idles; the monitor's cache is account-wide, so it also sees
+// work done elsewhere. Neither has a timestamp, but within one window usage
+// only grows until the reset: the later reset wins, and for the same window
+// (resets within ten minutes) the higher percent. A window whose reset has
+// passed has rolled over and is dropped.
+export function freshest(a: Window | undefined, b: Window | undefined, nowSec: number): Window | undefined {
+  const open = (w: Window | undefined) => (w && !(w.resetsAt !== undefined && w.resetsAt <= nowSec) ? w : undefined)
+  const x = open(a)
+  const y = open(b)
+  if (!x || !y) {
+    return x ?? y
+  }
+  const rx = x.resetsAt ?? 0
+  const ry = y.resetsAt ?? 0
+  if (Math.abs(rx - ry) <= 600) {
+    return x.percent >= y.percent ? x : y
+  }
+  return rx > ry ? x : y
+}
+
 // "+0300" / "-0430" -> minutes east of UTC; anything else -> 0.
 export function parseOffset(text: string): number {
   const m = /^([+-])(\d{2})(\d{2})/.exec(text.trim())
@@ -99,7 +120,10 @@ const T = {
     ago: 'назад',
     fromSession: 'Источник: последний ответ API этой сессии.',
     scopedFromCache: (age: string) => `Недельный лимит по модели — из кэша монитора (${age}).`,
-    fromCache: (age: string) => `Источник: кэш монитора (${age}) — в этой сессии ещё не было ответа API.`,
+    fromCache: (age: string) => `Источник: кэш монитора (${age}) — данные всего аккаунта, включая другие устройства.`,
+    mixed: (parts: string) => `Источник: ${parts}.`,
+    partSession: 'ответ API этой сессии',
+    partCache: (age: string) => `кэш монитора (${age})`,
     none: 'Нет данных о лимитах: в этой сессии ещё не было ответа API, а кэша монитора нет.',
     paused: (at: string) => `⏸ Монитор приостановил запросы к endpoint лимитов до ${at} (после ответа 429).`,
   },
@@ -117,7 +141,10 @@ const T = {
     ago: 'ago',
     fromSession: "Source: this session's last API response.",
     scopedFromCache: (age: string) => `The model-scoped weekly limit comes from the monitor's cache (${age}).`,
-    fromCache: (age: string) => `Source: the monitor's cache (${age}) — no API response in this session yet.`,
+    fromCache: (age: string) => `Source: the monitor's cache (${age}) — account-wide, other devices included.`,
+    mixed: (parts: string) => `Source: ${parts}.`,
+    partSession: "this session's API response",
+    partCache: (age: string) => `the monitor's cache (${age})`,
     none: "No usage data: no API response in this session yet, and no monitor cache.",
     paused: (at: string) => `⏸ The monitor paused requests to the usage endpoint until ${at} (after an HTTP 429).`,
   },
@@ -180,12 +207,19 @@ export function renderReport(r: Report, lang: Lang, t: Thresholds, nowMs: number
   if (r.seven) lines.push(line(l.seven, r.seven, lang, t, nowSec, offsetMin))
   if (r.scoped) lines.push(line(l.scoped(r.scoped.model), r.scoped, lang, t, nowSec, offsetMin))
 
-  if (r.source === 'none' && !r.scoped) {
+  const shown = [[l.five, r.five], [l.seven, r.seven]] as const
+  const froms = shown.filter(([, w]) => w).map(([, w]) => w!.from)
+  if (froms.length === 0 && !r.scoped) {
     lines.push(l.none)
-  } else if (r.source === 'session') {
+  } else if (froms.length > 0 && froms.every(f => f === 'session')) {
     lines.push(r.scoped ? `${l.fromSession} ${l.scopedFromCache(age)}` : l.fromSession)
-  } else if (r.source === 'cache') {
+  } else if (froms.every(f => f === 'cache')) {
     lines.push(l.fromCache(age))
+  } else {
+    const parts = shown
+      .filter(([, w]) => w)
+      .map(([label, w]) => `${label} — ${w!.from === 'session' ? l.partSession : l.partCache(age)}`)
+    lines.push(l.mixed(parts.join(', ')))
   }
 
   if (r.pausedUntil !== undefined && r.pausedUntil > nowSec) {

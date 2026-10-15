@@ -162,8 +162,20 @@ resolve_claude_bin() {
 # exit at once there, so the refresh never turns into another request to the
 # usage endpoint. Only call this from cron/status: calling it from hook mode
 # would add ~0.5s to every real Claude Code turn.
+# A headless Claude Code start is the expensive part of a failed check, so it
+# runs at most once per CLI_REFRESH_MIN seconds whatever the failure was — a
+# lost network, a 5xx or a signed-out keychain would otherwise start one on
+# every 92-second agent tick, more often than the 5-minute agent ever did.
+CLI_REFRESH_STAMP="$DIR/usage-monitor-cli-refresh"
+CLI_REFRESH_MIN=300
+
 refresh_via_cli() {
-  local claude_bin
+  local claude_bin last
+  last=$(stat -f %m "$CLI_REFRESH_STAMP" 2>/dev/null || echo 0)
+  if [ $(( $(date +%s) - last )) -lt "$CLI_REFRESH_MIN" ]; then
+    return 1
+  fi
+  touch "$CLI_REFRESH_STAMP" 2>/dev/null || true
   claude_bin=$(resolve_claude_bin) || { log_note "'claude -p /usage' refresh unavailable: claude binary not found"; return 1; }
   local claude_json="$HOME/.claude.json"
   local before after

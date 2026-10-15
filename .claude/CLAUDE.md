@@ -80,6 +80,13 @@ from the same files with no copy.
 - `userConfig` defaults are never materialised into the environment — an unset
   `CLAUDE_PLUGIN_OPTION_*` is the normal case, so every default is duplicated in
   bash. Booleans arrive as the literal strings `true` / `false`.
+- **The statusline's stdin `rate_limits` freeze while a session idles** —
+  Claude Code only refreshes them from its own API responses. That is why
+  each window takes the fresher of stdin and the account-wide cache
+  (`pick_window`: later reset wins, same window → higher percent; usage only
+  grows within a window), and why the statusline starts a detached
+  `usage-monitor.sh hook` when the cache is stale. Never go back to "stdin
+  always wins".
 - **Every hook script exits at once on `UM_INTERNAL=1`.** `usage-monitor.sh`
   sets it on its headless `claude -p /usage` refresh, which fires this
   project's own hooks; without the early exit each refresh made one more
@@ -100,8 +107,9 @@ from the same files with no copy.
   (a Claude Code "mod"), not part of the `limit-alerts` plugin and not listed
   in `marketplace.json`. It registers one command, `/limits` (`immediate`),
   answered by a `command.run` hook with `{ text }` — no model turn, no tokens.
-  5h/7d come from `$.session.usage().rateLimits`, else the monitor's cache
-  (same directory chain as the bash scripts, then
+  5h/7d take, per window, the fresher of `$.session.usage().rateLimits` and
+  the monitor's cache (`freshest`, the same rule as the statusline's
+  `pick_window`; same directory chain as the bash scripts, then
   `~/.claude/plugins/data/limit-alerts-*`); the scoped weekly limit always
   from the cache; the 429 backoff from `usage-monitor-backoff.json`. Local
   time comes from the host's `date +%z` — the worker's own zone is not to be

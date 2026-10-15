@@ -77,20 +77,31 @@ don't happen to have it in their environment.
 - **`usage-monitor.sh`** — the core. Fetches usage, compares against thresholds,
   maintains state, emits notifications.
 - **`statusline-with-limits.sh`** — statusline wrapper. Read-only, never
-  touches the network. The 5h and 7d percentages come from its own stdin:
+  touches the network itself. Two sources for 5h and 7d: its own stdin, where
   Claude Code passes `rate_limits.five_hour` / `rate_limits.seven_day`
-  (`used_percentage`, `resets_at` in epoch seconds), taken from the headers of
-  its last API response — current, and free. Both windows are taken from
-  stdin or neither, so a live and a cached number never sit side by side. The
-  cache fills in the model-scoped weekly limit (only the usage endpoint
-  reports it; hidden once its window has reset) and the first redraws of a
-  session, before any API response.
+  (`used_percentage`, `resets_at` in epoch seconds) from the headers of its
+  last API response — current while the session works, **frozen while it
+  idles** (Claude Code does not poll usage in the background); and the cache,
+  the usage endpoint's account-wide answer, which also sees work in other
+  terminals, on other devices and on claude.ai. Neither carries a timestamp,
+  but within one window usage only grows until the reset, so each window takes
+  the reading with the later reset, and for the same window (resets within
+  ten minutes) the higher percent; a window whose reset has passed is
+  dropped. The cache alone has the model-scoped weekly limit (hidden once its
+  window has reset).
+  To keep an idle line current, a cache older than
+  `UM_STATUSLINE_REFRESH_AFTER` (120 s) makes the statusline start
+  `usage-monitor.sh hook` detached — the redraw never waits for it, and that
+  mode keeps to the cache TTL, the 401/403/429 pause and the state lock. A
+  stamp spaces spawns at least 30 s apart. With the launchd agent on, the
+  cache rarely gets that old; with it off (the plugin's default), this is what
+  refreshes it. `UM_STATUSLINE_BG_REFRESH=0` turns it off.
   A window at or above `UM_WARN` gets its reset time, dim, after the percent
   (`↻HH:MM` within a day, `↻DD.MM` beyond); below the threshold the line stays
   short. `UM_STATUSLINE_RESET=0` turns it off.
-  5ч и 7д statusline берёт из своего stdin (их передаёт Claude Code), кэш — для
-  недельного лимита по модели и начала сессии. У окна, дошедшего до порога,
-  показывается время сброса. If
+  Для каждого окна statusline берёт более свежую цифру из stdin (ответ API этой
+  сессии, застывает при простое) и кэша (данные всего аккаунта), а устаревший
+  кэш обновляет в фоне. У окна, дошедшего до порога, показывается время сброса. If
   `~/.claude/scripts/statusline-base.cmd` exists, its content is executed as the
   base statusline and the limits are appended after a `|` separator.
 - **launchd agent** (`com.claude.usage-monitor`) — runs `usage-monitor.sh cron`
@@ -144,7 +155,10 @@ standing answer for some Team/organization tokens, and without the pause the
 92-second agent would ask, and spawn a CLI refresh, on every tick. On a 401 or
 403 the `claude -p /usage` refresh still gets one try as the pause starts —
 the CLI renews an expired token, and its own request may be served where this
-script's is not; on a 429 it is skipped, since it would ask the same endpoint. The pause lives in
+script's is not; on a 429 it is skipped, since it would ask the same endpoint.
+Whatever the failure, the CLI refresh runs at most once per 5 minutes
+(`usage-monitor-cli-refresh` stamp): a lost network, a 5xx or a signed-out
+keychain would otherwise start a headless Claude Code on every agent tick. The pause lives in
 `usage-monitor-backoff.json` in the state directory and is cleared by the next
 successful fetch. During it no live request and no `claude -p /usage` refresh
 is made; hook and cron stay silent, and `status` shows the last cache with
@@ -417,7 +431,9 @@ anti-spam state, duplicating every notification.
 | `~/.claude/scripts/statusline-base.cmd` | preserved previous statusline command (optional) |
 | `~/.claude/scripts/usage-monitor-cache.json` | cached API response |
 | `~/.claude/scripts/usage-monitor-state.json` | notification state |
-| `~/.claude/scripts/usage-monitor-backoff.json` | pause after HTTP 429 (exists only while one runs) |
+| `~/.claude/scripts/usage-monitor-backoff.json` | pause after HTTP 401/403/429 (exists only while one runs) |
+| `~/.claude/scripts/usage-monitor-cli-refresh` | stamp: last `claude -p /usage` refresh (at most one per 5 min) |
+| `~/.claude/scripts/usage-monitor-sl-refresh` | stamp: last background refresh started by the statusline |
 | `~/.claude/scripts/usage-monitor.lock` | state-update lock (exists only while a check runs) |
 | `~/.claude/scripts/compact-advisor-state.json` | compact-signal anti-spam state |
 | `~/.claude/scripts/.limit-alerts-options` | options chosen at install time |

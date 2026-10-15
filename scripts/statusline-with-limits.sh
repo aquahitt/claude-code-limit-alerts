@@ -11,12 +11,14 @@
 # "wk Fable 4%" is the weekly model-scoped LIMIT, not a running model — hence
 # the prefix, now that a real model name shares the line.
 #
-# The 5h and 7d percentages come from this statusline's own stdin: Claude Code
-# passes .rate_limits (five_hour / seven_day, from the headers of its last API
-# response), so they are current and cost no request. The usage-monitor cache
-# fills in what stdin lacks — the model-scoped weekly limit, which only the
-# usage endpoint reports, and the first redraws of a session, before any API
-# response. No network calls either way, so the statusline stays fast.
+# The 5h and 7d percentages come from two places, and each window takes the
+# fresher of them (see pick_window): this statusline's own stdin, where Claude
+# Code passes .rate_limits from the headers of its last API response — current
+# while the session works, frozen while it idles — and the usage-monitor
+# cache, the account-wide answer of the usage endpoint, which also sees work
+# done elsewhere. The cache alone has the model-scoped weekly limit. The
+# statusline itself makes no network call; when the cache grows stale it only
+# starts a detached refresh, so the line stays fast.
 #
 # If ~/.claude/scripts/statusline-base.cmd exists, its content is executed
 # as the base statusline command (stdin JSON is passed through). Without it
@@ -41,6 +43,9 @@
 #   UM_STATUSLINE_RESET=1  0 hides the reset time shown next to a window that
 #                          has reached UM_WARN ("5ч 84% ↻00:20"; past a day
 #                          away, the date instead: "↻15.10")
+#   UM_STATUSLINE_BG_REFRESH=1  0 stops the statusline from refreshing a stale
+#                          cache in the background (see the block near the end)
+#   UM_STATUSLINE_REFRESH_AFTER=120  cache age, seconds, that triggers it
 #   UM_SUBAGENT_TTL=180    how recently a subagent transcript must have been
 #                          written for the subagent to count as running, sec
 
@@ -58,6 +63,8 @@ SL_ADVISOR="${UM_STATUSLINE_ADVISOR:-1}"
 SL_SUBAGENT="${UM_SUBAGENT_MODEL:-1}"
 SUBAGENT_TTL="${UM_SUBAGENT_TTL:-180}"
 SL_RESET="${UM_STATUSLINE_RESET:-1}"
+SL_BG_REFRESH="${UM_STATUSLINE_BG_REFRESH:-1}"
+SL_REFRESH_AFTER="${UM_STATUSLINE_REFRESH_AFTER:-120}"
 SETTINGS="$HOME/.claude/settings.json"
 
 # Real ESC bytes, not the literal text "\033[...]". The final render uses
@@ -276,18 +283,47 @@ reset_suffix() { # $1 = percent, $2 = reset epoch (0 = unknown)
   fi
 }
 
+# Each window is taken from whichever source is fresher, decided per window:
+# stdin carries what Claude Code saw in this session's last API response —
+# current while the session works, frozen while it idles; the cache holds the
+# account-wide answer of the usage endpoint, refreshed by the agent and the
+# hooks, so it also sees work in other terminals, on other devices, on
+# claude.ai. Neither carries a timestamp, but within one window usage only
+# grows until the reset: so the later reset wins, and for the same window
+# (reset times within ten minutes) the higher percent. A window whose reset
+# has passed has rolled over and is dropped.
+NOW_S=$(date +%s)
+pick_window() { # $1 pct A, $2 reset A, $3 pct B, $4 reset B ("" = absent) -> "pct reset"
+  local pa="$1" ra="${2:-0}" pb="$3" rb="${4:-0}" gap
+  if [ -n "$pa" ] && [ "$ra" -gt 0 ] && [ "$ra" -le "$NOW_S" ]; then pa=""; fi
+  if [ -n "$pb" ] && [ "$rb" -gt 0 ] && [ "$rb" -le "$NOW_S" ]; then pb=""; fi
+  if [ -z "$pa" ]; then [ -n "$pb" ] && echo "$pb $rb"; return 0; fi
+  if [ -z "$pb" ]; then echo "$pa $ra"; return 0; fi
+  gap=$(( ra - rb )); [ "$gap" -lt 0 ] && gap=$(( -gap ))
+  if [ "$gap" -le 600 ]; then
+    [ "$pa" -ge "$pb" ] && pb="$pa"
+    [ "$ra" -ge "$rb" ] && rb="$ra"
+    echo "$pb $rb"
+  elif [ "$ra" -gt "$rb" ]; then
+    echo "$pa $ra"
+  else
+    echo "$pb $rb"
+  fi
+}
+
 LIMITS=""
 s=""; w=""; r5=0; r7=0; f="-1"; rf=0; SCOPED_MODEL=""
+s5=""; s7=""; sr5=0; sr7=0; cs=""; cw=""; cr5=0; cr7=0
 if [ -x "$JQ" ]; then
-  # Both windows or neither: one live and one cached number side by side would
-  # silently mix two moments. resets_at arrives here as epoch seconds.
-  read -r s w r5 r7 <<< "$(printf '%s' "$INPUT" | "$JQ" -r '
+  # resets_at arrives here as epoch seconds; "-" marks an absent window.
+  read -r s5 s7 sr5 sr7 <<< "$(printf '%s' "$INPUT" | "$JQ" -r '
     .rate_limits as $rl
-    | [$rl.five_hour.used_percentage, $rl.seven_day.used_percentage]
-    | if all(type == "number") then
-        (map(floor) + [($rl.five_hour.resets_at // 0), ($rl.seven_day.resets_at // 0)]
-         | map(tostring) | join(" "))
-      else "" end' 2>/dev/null)"
+    | [ ($rl.five_hour.used_percentage | if type == "number" then floor else "-" end),
+        ($rl.seven_day.used_percentage | if type == "number" then floor else "-" end),
+        ($rl.five_hour.resets_at // 0), ($rl.seven_day.resets_at // 0) ]
+    | map(tostring) | join(" ")' 2>/dev/null)"
+  [ "${s5:-}" = "-" ] && s5=""
+  [ "${s7:-}" = "-" ] && s7=""
   if [ -f "$CACHE" ]; then
     # The cache stores resets_at as ISO 8601. The scoped limit is shown only
     # while its window is still open: from a cache that outlived its reset,
@@ -309,15 +345,42 @@ if [ -x "$JQ" ]; then
     # the rest under read's whitespace splitting). Never show it as 0%.
     [ "${cs:-}" = "-" ] && cs=""
     [ "${cw:-}" = "-" ] && cw=""
-    if [ -z "$s" ]; then s="${cs:-}"; w="${cw:-}"; r5="${cr5:-0}"; r7="${cr7:-0}"; fi
   fi
-  if [ -n "$s" ] && [ -n "$w" ]; then
-    LIMITS="${L5} $(colorize "$s")$(reset_suffix "$s" "$r5") ${DIM}·${RST} ${L7} $(colorize "$w")$(reset_suffix "$w" "$r7")"
-    # model-scoped weekly limit (-1 = absent or expired, hidden). The WK
-    # prefix keeps this from reading as "the model currently running".
-    if [ "$f" -ge 0 ] 2>/dev/null && [ -n "$SCOPED_MODEL" ]; then
-      LIMITS="$LIMITS ${DIM}·${RST} ${WK} ${SCOPED_MODEL} $(colorize "$f")$(reset_suffix "$f" "${rf:-0}")"
-    fi
+  read -r s r5 <<< "$(pick_window "$s5" "${sr5:-0}" "$cs" "${cr5:-0}")"
+  read -r w r7 <<< "$(pick_window "$s7" "${sr7:-0}" "$cw" "${cr7:-0}")"
+  seg5=""; seg7=""
+  [ -n "$s" ] && seg5="${L5} $(colorize "$s")$(reset_suffix "$s" "${r5:-0}")"
+  [ -n "$w" ] && seg7="${L7} $(colorize "$w")$(reset_suffix "$w" "${r7:-0}")"
+  for seg in "$seg5" "$seg7"; do
+    [ -n "$seg" ] || continue
+    [ -n "$LIMITS" ] && LIMITS="$LIMITS ${DIM}·${RST} "
+    LIMITS="${LIMITS}${seg}"
+  done
+  # model-scoped weekly limit (-1 = absent or expired, hidden). The WK
+  # prefix keeps this from reading as "the model currently running".
+  if [ -n "$LIMITS" ] && [ "$f" -ge 0 ] 2>/dev/null && [ -n "$SCOPED_MODEL" ]; then
+    LIMITS="$LIMITS ${DIM}·${RST} ${WK} ${SCOPED_MODEL} $(colorize "$f")$(reset_suffix "$f" "${rf:-0}")"
+  fi
+fi
+
+# Keep the account-wide numbers fresh while this terminal is merely open: the
+# statusline redraws every refreshInterval even when the session idles, so a
+# cache older than UM_STATUSLINE_REFRESH_AFTER starts `usage-monitor.sh hook`
+# in the background — detached, the line never waits for it. That mode makes
+# at most one request per UM_CACHE_TTL, honours the 401/403/429 pause and the
+# state lock, and sends the same once-per-threshold notifications. With the
+# launchd agent on, the cache rarely gets that old and this stays idle; with
+# it off (the plugin's default), this is what keeps an idle line current.
+# The stamp spaces out spawns from the many redraws of one busy minute.
+if [ "$SL_BG_REFRESH" = "1" ]; then
+  cache_mtime=$(stat -f %m "$CACHE" 2>/dev/null || echo 0)
+  spawn_stamp="$UM_DIR/usage-monitor-sl-refresh"
+  spawn_mtime=$(stat -f %m "$spawn_stamp" 2>/dev/null || echo 0)
+  monitor="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/usage-monitor.sh"
+  if [ $(( NOW_S - cache_mtime )) -ge "$SL_REFRESH_AFTER" ] \
+     && [ $(( NOW_S - spawn_mtime )) -ge 30 ] && [ -f "$monitor" ]; then
+    touch "$spawn_stamp" 2>/dev/null || true
+    ( nohup bash "$monitor" hook </dev/null >/dev/null 2>&1 & )
   fi
 fi
 

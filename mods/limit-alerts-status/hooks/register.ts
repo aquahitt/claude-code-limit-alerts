@@ -1,6 +1,6 @@
 import type { EngineInterface, PluginOptions, Register } from 'claude-code'
 
-import { fromCache, fromRateLimits, parseOffset, renderReport, type Cache, type Lang, type Report } from './format'
+import { freshest, fromCache, fromRateLimits, parseOffset, renderReport, type Cache, type Lang, type Report, type Window } from './format'
 
 const CACHE_FILE = 'usage-monitor-cache.json'
 const BACKOFF_FILE = 'usage-monitor-backoff.json'
@@ -87,16 +87,13 @@ async function buildReport($: EngineInterface, options: PluginOptions): Promise<
   }
   const now = await $.clock.now()
 
-  // 5h/7d: this session's last API response wins, being current; the
-  // monitor's cache fills in the scoped weekly limit, and 5h/7d before the
-  // session has talked to the API.
+  // 5h/7d: per window, the fresher of this session's last API response and
+  // the monitor's cache (see freshest); the cache alone has the scoped limit.
+  const nowSec = Math.floor(now / 1000)
+  const tag = (w: Window | undefined, from: 'session' | 'cache') => (w ? { ...w, from } : undefined)
   const live = fromRateLimits((await $.session.usage()).rateLimits)
-  const report: Report = { source: 'none' }
-  if (live.five && live.seven) {
-    report.five = live.five
-    report.seven = live.seven
-    report.source = 'session'
-  }
+  let cached: ReturnType<typeof fromCache> = {}
+  const report: Report = {}
 
   const dir = await locate($, options)
   if (dir) {
@@ -104,20 +101,18 @@ async function buildReport($: EngineInterface, options: PluginOptions): Promise<
     const cacheMtime = await mtime($, cachePath)
     const cache = cacheMtime === undefined ? undefined : await readJson<Cache>($, cachePath)
     if (cache && cacheMtime !== undefined) {
-      const cached = fromCache(cache)
+      cached = fromCache(cache)
       report.cacheAgeMs = Math.max(0, now - cacheMtime)
-      report.scoped = cached.scoped
-      if (report.source === 'none' && cached.five && cached.seven) {
-        report.five = cached.five
-        report.seven = cached.seven
-        report.source = 'cache'
-      }
+      report.scoped = freshest(cached.scoped, undefined, nowSec) as Report['scoped']
     }
     const backoff = await readJson<{ until?: number }>($, `${dir}/${BACKOFF_FILE}`)
     if (typeof backoff?.until === 'number') {
       report.pausedUntil = backoff.until
     }
   }
+
+  report.five = freshest(tag(live.five, 'session'), tag(cached.five, 'cache'), nowSec)
+  report.seven = freshest(tag(live.seven, 'session'), tag(cached.seven, 'cache'), nowSec)
 
   return renderReport(report, lang, thresholds, now, await zoneOffset($))
 }
