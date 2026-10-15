@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { CommandRunInput, On, SessionRateLimit } from 'claude-code'
 
-import { fromCache, parseOffset, renderReport } from './format'
+import { freshest, fromCache, parseOffset, renderReport } from './format'
 
 const T = { warn: 80, crit: 95 }
 // 2026-10-10 12:00:00 UTC
@@ -12,9 +12,8 @@ const MSK = 180 // +0300
 describe('report', () => {
   test('marks thresholds, shows reset time and countdown in local time', () => {
     const text = renderReport({
-      source: 'session',
-      five: { percent: 84, resetsAt: NOW_S + 58 * 60 },
-      seven: { percent: 96.4, resetsAt: NOW_S + 5 * 86400 + 7 * 3600 },
+      five: { percent: 84, resetsAt: NOW_S + 58 * 60, from: 'session' },
+      seven: { percent: 96.4, resetsAt: NOW_S + 5 * 86400 + 7 * 3600, from: 'session' },
     }, 'ru', T, NOW, MSK)
     expect(text).toBe([
       'Лимиты Claude Code',
@@ -26,9 +25,8 @@ describe('report', () => {
 
   test('says where the scoped limit comes from and how old it is', () => {
     const text = renderReport({
-      source: 'session',
-      five: { percent: 10 },
-      seven: { percent: 20 },
+      five: { percent: 10, from: 'session' },
+      seven: { percent: 20, from: 'session' },
       scoped: { model: 'Fable', percent: 4, resetsAt: NOW_S - 60 },
       cacheAgeMs: 12 * 60_000,
     }, 'en', T, NOW, 0)
@@ -43,14 +41,33 @@ describe('report', () => {
 
   test('cache source, rate-limit pause, and no data at all', () => {
     const cached = renderReport({
-      source: 'cache', five: { percent: 1 }, seven: { percent: 2 },
+      five: { percent: 1, from: 'cache' }, seven: { percent: 2, from: 'cache' },
       cacheAgeMs: 3 * 3600_000, pausedUntil: NOW_S + 600,
     }, 'ru', T, NOW, MSK)
-    expect(cached).toContain('Источник: кэш монитора (3 ч назад)')
+    expect(cached).toContain('Источник: кэш монитора (3 ч назад) — данные всего аккаунта')
     expect(cached).toContain('до 15:10 (после ответа 429)')
-    expect(renderReport({ source: 'none' }, 'en', T, NOW, 0)).toContain('No usage data')
+    expect(renderReport({}, 'en', T, NOW, 0)).toContain('No usage data')
     // a pause already over is not mentioned
-    expect(renderReport({ source: 'none', pausedUntil: NOW_S - 1 }, 'en', T, NOW, 0)).not.toContain('paused')
+    expect(renderReport({ pausedUntil: NOW_S - 1 }, 'en', T, NOW, 0)).not.toContain('paused')
+  })
+
+  test('names the source of each window when they differ', () => {
+    const text = renderReport({
+      five: { percent: 60, from: 'cache' }, seven: { percent: 48, from: 'session' }, cacheAgeMs: 60_000,
+    }, 'ru', T, NOW, MSK)
+    expect(text).toContain('Источник: Сессия (5ч) — кэш монитора (1 мин назад), Неделя (все модели) — ответ API этой сессии.')
+  })
+
+  test('picks the fresher reading of a window', () => {
+    const r = NOW_S + 3600
+    // same window: usage only grows, so the higher percent is the later one
+    expect(freshest({ percent: 32, resetsAt: r }, { percent: 60, resetsAt: r + 2 }, NOW_S)?.percent).toBe(60)
+    // a later window wins even at a lower percent
+    expect(freshest({ percent: 90, resetsAt: r }, { percent: 5, resetsAt: r + 5 * 3600 }, NOW_S)?.percent).toBe(5)
+    // a window whose reset passed is dropped
+    expect(freshest({ percent: 95, resetsAt: NOW_S - 1 }, { percent: 7, resetsAt: r }, NOW_S)?.percent).toBe(7)
+    expect(freshest(undefined, { percent: 7, resetsAt: r }, NOW_S)?.percent).toBe(7)
+    expect(freshest(undefined, undefined, NOW_S)).toBeUndefined()
   })
 
   test('parses zone offsets and the cache format', () => {
@@ -129,6 +146,22 @@ describe('mod', () => {
       'Источник: последний ответ API этой сессии. Недельный лимит по модели — из кэша монитора (5 мин назад).',
       '⏸ Монитор приостановил запросы к endpoint лимитов до 15:15 (после ответа 429).',
     ].join('\n'))
+  })
+
+  test('an idle session shows the account-wide cache when it is fresher', async ($, on) => {
+    const reset = new Date(NOW + 3600_000).toISOString()
+    const cache = JSON.stringify({
+      five_hour: { utilization: 60, resets_at: reset }, seven_day: { utilization: 40 },
+    })
+    world(on, { [`${DIR}/usage-monitor-cache.json`]: { text: cache, mtimeMs: NOW - 60_000 } }, [
+      { kind: 'five_hour', percentUsed: 32, resetsAt: reset },
+      { kind: 'seven_day', percentUsed: 48 },
+    ])
+    await $.session.start(START)
+    const { text } = await $.command.run(RUN)
+    expect(text).toContain('Сессия (5ч): 60%')
+    expect(text).toContain('Неделя (все модели): 48%')
+    expect(text).toContain('Источник: Сессия (5ч) — кэш монитора (1 мин назад), Неделя (все модели) — ответ API этой сессии.')
   })
 
   test('falls back to the cache before the session has talked to the API', async ($, on) => {

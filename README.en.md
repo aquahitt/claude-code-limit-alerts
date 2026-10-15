@@ -69,11 +69,14 @@ If live data can't be fetched (for example, the endpoint answers 429),
   `~/.claude/scripts` and appends hooks to `~/.claude/settings.json`. The
   monitoring logic is identical in both — they are the same files.
 - The **statusline wrapper** appends percentages to your existing statusline
-  (which is preserved and keeps rendering). Claude Code itself passes the 5h
-  and 7d percentages to the statusline, current as of its last API response;
-  the model-scoped weekly limit and the first moments of a session come from a
-  local cache. The statusline makes no network calls. Once a window reaches
-  the warning threshold, its reset time appears next to it: `5h 84% ↻00:20`.
+  (which is preserved and keeps rendering). Each window shows the fresher of
+  two numbers: the one Claude Code passes the statusline from this session's
+  last API response, or the account-wide one the monitor fetched — so the line
+  also reflects work in other terminals, on other devices, on claude.ai, even
+  while this terminal just sits open. The statusline refreshes a stale cache
+  itself, in the background, without delaying the redraw. Once a window
+  reaches the warning threshold, its reset time appears next to it:
+  `5h 84% ↻00:20`.
 - No spam: one notification per threshold (80% and 95%) per window; a reset is
   only announced if usage was ≥ 50%.
 
@@ -246,6 +249,8 @@ the defaults at the top of `usage-monitor.sh`):
 | `UM_SUBAGENT_TTL` | `180` | how recently a subagent must have written for it to count as running, seconds |
 | `UM_STATUSLINE_ADVISOR` | `1` | show the advisor model (`/advisor`) |
 | `UM_STATUSLINE_RESET` | `1` | reset time next to a window that reached the warning threshold: `5h 84% ↻00:20`, the date `↻15.10` when it is over a day away |
+| `UM_STATUSLINE_BG_REFRESH` | `1` | the statusline refreshes a stale cache in the background (what keeps usage from other devices visible without the background agent) |
+| `UM_STATUSLINE_REFRESH_AFTER` | `120` | cache age, seconds, after which the statusline starts a refresh |
 
 The background check interval is `StartInterval` (seconds, 92 by default) in
 `~/Library/LaunchAgents/com.claude.usage-monitor.plist`. If the endpoint answers
@@ -306,10 +311,11 @@ Week (Fable): 4%
 Source: this session's last API response. The model-scoped weekly limit comes from the monitor's cache (5 min ago).
 ```
 
-The 5h and 7d percentages come from this session's last API response, and
-before the first one from `usage-monitor-cache.json` (from `UM_STATE_DIR`,
-`~/.claude/scripts`, or the `limit-alerts` plugin's data directory). The
-model-scoped weekly limit always comes from the cache. If the monitor is
+Each window takes the fresher number — from this session's last API response
+or from `usage-monitor-cache.json` (from `UM_STATE_DIR`, `~/.claude/scripts`,
+or the `limit-alerts` plugin's data directory), as in the statusline; the
+summary says where each window came from. The model-scoped weekly limit always
+comes from the cache. If the monitor is
 backing off after an HTTP 429, the summary says so.
 
 To run it:

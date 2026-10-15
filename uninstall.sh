@@ -63,6 +63,8 @@ rm -f "$SCRIPTS_DIR/usage-monitor.sh" \
       "$SCRIPTS_DIR/usage-monitor-state.json" \
       "$SCRIPTS_DIR/usage-monitor-cache.json" \
       "$SCRIPTS_DIR/usage-monitor-backoff.json" \
+      "$SCRIPTS_DIR/usage-monitor-cli-refresh" \
+      "$SCRIPTS_DIR/usage-monitor-sl-refresh" \
       "$SCRIPTS_DIR/auto-resume-state.json" \
       "$SCRIPTS_DIR/compact-advisor-state.json" \
       "$SCRIPTS_DIR/.limit-alerts-version" \
