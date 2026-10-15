@@ -15,6 +15,8 @@
   плагин `limit-alerts` и в marketplace не входит: API модов пока в early
   access. Запуск: `claude --plugin-dir mods/limit-alerts-status`.
 
+## [0.9.1] - 2026-10-15
+
 ### Fixed
 
 - Переключение между аккаунтами (или организациями) выглядело для монитора
