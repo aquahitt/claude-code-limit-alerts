@@ -324,6 +324,41 @@ if [ -x "$JQ" ]; then
     | map(tostring) | join(" ")' 2>/dev/null)"
   [ "${s5:-}" = "-" ] && s5=""
   [ "${s7:-}" = "-" ] && s7=""
+  # Several sessions working at once each see their own last API response,
+  # so their stdin readings differ by whatever was spent in between. A shared
+  # file keeps the freshest reading any of them has seen: each redraw merges
+  # its own stdin into it (same rule) and draws from the merged value, so all
+  # terminals converge on one number within a redraw. Read-merge-write runs
+  # under a mkdir lock, or a redraw holding an older reading could overwrite a
+  # newer one. A redraw that finds the lock taken retries for up to ~0.3 s
+  # (only ever under simultaneous redraws), then just reads. The write goes
+  # through a temp file and mv, so a reader never sees half a line.
+  observed="$UM_DIR/usage-monitor-observed"
+  obs_lock="$observed.lock"
+  have_obs_lock=0
+  if [ -n "$(find "$obs_lock" -maxdepth 0 -mmin +1 2>/dev/null)" ]; then
+    rmdir "$obs_lock" 2>/dev/null
+  fi
+  for _try in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    if mkdir "$obs_lock" 2>/dev/null; then have_obs_lock=1; break; fi
+    sleep 0.02
+  done
+  o5=""; o7=""; or5=0; or7=0
+  [ -f "$observed" ] && read -r o5 or5 o7 or7 < "$observed"
+  [ "${o5:-}" = "-" ] && o5=""
+  [ "${o7:-}" = "-" ] && o7=""
+  read -r m5 mr5 <<< "$(pick_window "$s5" "${sr5:-0}" "$o5" "${or5:-0}")"
+  read -r m7 mr7 <<< "$(pick_window "$s7" "${sr7:-0}" "$o7" "${or7:-0}")"
+  merged="${m5:--} ${mr5:-0} ${m7:--} ${mr7:-0}"
+  if [ "$have_obs_lock" = "1" ]; then
+    if [ "$merged" != "${o5:--} ${or5:-0} ${o7:--} ${or7:-0}" ]; then
+      tmp_obs=$(mktemp "$observed.XXXXXX" 2>/dev/null) \
+        && printf '%s\n' "$merged" > "$tmp_obs" && mv -f "$tmp_obs" "$observed" 2>/dev/null
+      [ -n "${tmp_obs:-}" ] && rm -f "$tmp_obs" 2>/dev/null
+    fi
+    rmdir "$obs_lock" 2>/dev/null
+  fi
+  s5="${m5:-}"; sr5="${mr5:-0}"; s7="${m7:-}"; sr7="${mr7:-0}"
   if [ -f "$CACHE" ]; then
     # The cache stores resets_at as ISO 8601. The scoped limit is shown only
     # while its window is still open: from a cache that outlived its reset,
