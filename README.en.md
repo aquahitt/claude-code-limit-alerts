@@ -62,7 +62,7 @@ If live data can't be fetched (for example, the endpoint answers 429),
   Keychain — no extra API keys or logins required.
 - **Claude Code hooks** (`Stop` + `SessionStart`) surface warnings right in the
   UI after each turn and on session start.
-- A **launchd agent** checks limits every 5 minutes in the background — the
+- A **launchd agent** checks limits every 92 seconds in the background — the
   window-reset notification arrives even when Claude Code is closed.
 - **Two ways to run it.** The plugin registers its own hooks and keeps state in
   its own data directory; `install.sh` copies the scripts into
@@ -160,7 +160,7 @@ Configure it under `/plugin` → limit-alerts → Configure:
 | `attention` | on | "needs your attention" notifications |
 | `compact_advisor` | on | the `/compact` signal |
 | `statusline` | **off** | limit percentages in the statusline |
-| `launchd` | **off** | background agent, checks every 5 minutes |
+| `launchd` | **off** | background agent, checks every 92 seconds |
 
 The last two are off on purpose: they write outside the plugin — into
 `~/.claude/settings.json` and `~/Library/LaunchAgents`. Turn them on in the
@@ -247,8 +247,10 @@ the defaults at the top of `usage-monitor.sh`):
 | `UM_STATUSLINE_ADVISOR` | `1` | show the advisor model (`/advisor`) |
 | `UM_STATUSLINE_RESET` | `1` | reset time next to a window that reached the warning threshold: `5h 84% ↻00:20`, the date `↻15.10` when it is over a day away |
 
-The background check interval is `StartInterval` (seconds) in
-`~/Library/LaunchAgents/com.claude.usage-monitor.plist`.
+The background check interval is `StartInterval` (seconds, 92 by default) in
+`~/Library/LaunchAgents/com.claude.usage-monitor.plist`. If the endpoint answers
+401, 403 or 429, the agent pauses on its own (5 minutes and up) instead of
+asking every 92 seconds.
 
 ## Troubleshooting
 
@@ -321,6 +323,15 @@ The mod is not part of the `limit-alerts` plugin or the marketplace: the mod
 API is still early access and may change between Claude Code versions.
 
 ## FAQ
+
+**Does it work with Team and Enterprise, not just a personal plan?**
+Yes — the data sources are the same for any claude.ai sign-in. The statusline
+takes 5h/7d from what Claude Code itself passes it from API responses, which
+does not depend on the plan. The monitor asks the same endpoint as `/usage` in
+Claude Code; if it answers 403 for your account (seen with Team/organization
+accounts), the monitor refreshes once through Claude Code itself
+(`claude -p /usage`) and pauses, instead of asking again every 92 seconds.
+Windows your plan doesn't have are simply not shown — no fake `0%`.
 
 **Notifications don't show up.**
 Make sure notifications from "Script Editor" are allowed in

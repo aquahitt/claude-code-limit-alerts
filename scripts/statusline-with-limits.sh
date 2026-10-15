@@ -298,13 +298,17 @@ if [ -x "$JQ" ]; then
                  | (try fromdateiso8601 catch 0);
       ([.limits[]? | select(.kind == "weekly_scoped")][0]) as $sc
       | ($sc.resets_at | epoch) as $reset
-      | [ (.five_hour.utilization // 0 | floor),
-          (.seven_day.utilization // 0 | floor),
+      | [ (.five_hour.utilization | if type == "number" then floor else "-" end),
+          (.seven_day.utilization | if type == "number" then floor else "-" end),
           (if $sc != null and ($sc.percent | type) == "number" and ($reset == 0 or $reset > now)
              then ($sc.percent | floor) else -1 end),
           (.five_hour.resets_at | epoch), (.seven_day.resets_at | epoch), $reset,
           ($sc.scope.model.display_name // "") ]
       | map(tostring) | join("\t")' "$CACHE" 2>/dev/null)"
+    # "-" marks a window the cache does not have (an empty field would shift
+    # the rest under read's whitespace splitting). Never show it as 0%.
+    [ "${cs:-}" = "-" ] && cs=""
+    [ "${cw:-}" = "-" ] && cw=""
     if [ -z "$s" ]; then s="${cs:-}"; w="${cw:-}"; r5="${cr5:-0}"; r7="${cr7:-0}"; fi
   fi
   if [ -n "$s" ] && [ -n "$w" ]; then

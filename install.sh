@@ -9,7 +9,7 @@
 #        - Notification + Stop -> "needs your attention" banner + sound
 #   3. Optionally replaces the statusline with the limits-aware wrapper
 #      (your previous statusline command is preserved and keeps rendering)
-#   4. Installs and loads a launchd agent (checks limits every 5 minutes,
+#   4. Installs and loads a launchd agent (checks limits every 92 seconds,
 #      catches window resets even when Claude Code is closed)
 #
 # Flags:
@@ -220,7 +220,7 @@ if [ "$WITH_LAUNCHD" = "1" ]; then
   print_proxy_status "$PLIST" "$PROXY_ARG"
   launchctl bootout "gui/$(id -u)/com.claude.usage-monitor" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$PLIST"
-  echo "    Agent loaded (checks every 5 minutes)"
+  echo "    Agent loaded (checks every 92 seconds)"
 fi
 
 echo

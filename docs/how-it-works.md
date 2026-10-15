@@ -65,7 +65,7 @@ don't happen to have it in their environment.
               mode: hook        mode: cron      mode: status
                     │                │               │
         Claude Code hooks      launchd agent     terminal
-        (Stop, SessionStart)   (every 5 min)
+        (Stop, SessionStart)   (every 92 s)
                     │                │
           systemMessage in UI   macOS notification (osascript)
                     │
@@ -94,7 +94,7 @@ don't happen to have it in their environment.
   `~/.claude/scripts/statusline-base.cmd` exists, its content is executed as the
   base statusline and the limits are appended after a `|` separator.
 - **launchd agent** (`com.claude.usage-monitor`) — runs `usage-monitor.sh cron`
-  every 5 minutes. This is what makes reset notifications work while Claude Code
+  every 92 seconds. This is what makes reset notifications work while Claude Code
   is closed, and what keeps the cache (the statusline's model-scoped weekly
   limit and its fallback) fresh between turns.
 - **`notify-attention.sh`** — independent of the limit monitor. Hooked to
@@ -136,9 +136,15 @@ reports the same news. A lock older than a minute is treated as abandoned.
 
 ### Rate limiting / Ограничение частоты
 
-When the usage endpoint answers **429**, live requests pause: for
+When the usage endpoint answers **429, 403 or 401**, live requests pause: for
 `Retry-After` seconds when the server sends a number, otherwise for 5 minutes,
-doubling on each further 429, capped at an hour. The pause lives in
+doubling on each further refusal, capped at an hour. 403 is treated like 429
+because Claude Code's own client does the same; it has also been seen as a
+standing answer for some Team/organization tokens, and without the pause the
+92-second agent would ask, and spawn a CLI refresh, on every tick. On a 401 or
+403 the `claude -p /usage` refresh still gets one try as the pause starts —
+the CLI renews an expired token, and its own request may be served where this
+script's is not; on a 429 it is skipped, since it would ask the same endpoint. The pause lives in
 `usage-monitor-backoff.json` in the state directory and is cleared by the next
 successful fetch. During it no live request and no `claude -p /usage` refresh
 is made; hook and cron stay silent, and `status` shows the last cache with
@@ -149,7 +155,7 @@ hooks. It runs with `UM_INTERNAL=1`, and every hook script exits at once when
 it sees that — otherwise each refresh would send one more request to the very
 endpoint that is failing, and the Stop hooks would banner a session nobody sees.
 
-После ответа 429 живые запросы приостанавливаются (по `Retry-After` или
+После ответа 429, 403 или 401 живые запросы приостанавливаются (по `Retry-After` или
 5 → 10 → 20 … минут, не больше часа), а внутренний `claude -p /usage` не
 запускает хуки проекта — иначе каждая проверка порождала бы ещё один запрос.
 
