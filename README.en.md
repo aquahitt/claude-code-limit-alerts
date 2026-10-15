@@ -332,6 +332,13 @@ API is still early access and may change between Claude Code versions.
 
 ## FAQ
 
+**I switch between several accounts — will the numbers get mixed up?**
+No. Everything is tied to the current sign-in (account + organization from
+`~/.claude.json`): each account has its own notification state and its own
+pause after errors, and the cache and the statusline show only the current
+account's numbers. Switching causes no false "♻️ reset" and no repeated
+warnings.
+
 **Does it work with Team and Enterprise, not just a personal plan?**
 Yes — the data sources are the same for any claude.ai sign-in. The statusline
 takes 5h/7d from what Claude Code itself passes it from API responses, which

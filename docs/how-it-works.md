@@ -157,6 +157,32 @@ same state, both would see a threshold as new, and the warning would arrive
 twice. A run that cannot take the lock within ~5 s exits quietly — the holder
 reports the same news. A lock older than a minute is treated as abandoned.
 
+### Several accounts / Несколько аккаунтов
+
+One machine can sign in to several accounts in turn, and one person can be
+in several organizations (a personal plan and a Team seat) with separate
+limits. Everything is keyed by **account + organization** — `accountUuid` and
+`organizationUuid` from `oauthAccount` in `~/.claude.json`, the current
+sign-in:
+
+- the anti-spam state and the 401/403/429 pause live in one file per account
+  (`usage-monitor-state.<key>.json`, `usage-monitor-backoff.<key>.json`), so
+  switching accounts is no longer read as a window reset (a false ♻️) and
+  does not re-arm the 🟡/🔴 warnings; switching back finds the account's own
+  state, and one account's successful fetch does not lift another's pause;
+- the cache carries an `_account` tag and is used only by its account; the
+  statusline treats another account's cache as missing and refreshes it;
+- the statuslines' shared observation carries the account too;
+- the `claude -p /usage` fallback reads `cachedUsageUtilization` only when its
+  `accountUuid` is the signed-in one, as Claude Code itself does.
+
+The single state file of ≤ 0.9.0 is adopted by the first account seen and
+retired. Without an OAuth sign-in nothing is tagged, as before.
+
+Состояние антиспама, пауза после ошибок, кэш и общее наблюдение statusline
+привязаны к аккаунту и организации из `~/.claude.json`: переключение
+аккаунтов больше не выглядит как сброс окна и не показывает чужие цифры.
+
 ### Rate limiting / Ограничение частоты
 
 When the usage endpoint answers **429, 403 or 401**, live requests pause: for
@@ -442,8 +468,8 @@ anti-spam state, duplicating every notification.
 | `~/.claude/scripts/compact-advisor.sh` | Stop hook: `/compact` signal |
 | `~/.claude/scripts/statusline-base.cmd` | preserved previous statusline command (optional) |
 | `~/.claude/scripts/usage-monitor-cache.json` | cached API response |
-| `~/.claude/scripts/usage-monitor-state.json` | notification state |
-| `~/.claude/scripts/usage-monitor-backoff.json` | pause after HTTP 401/403/429 (exists only while one runs) |
+| `~/.claude/scripts/usage-monitor-state.<key>.json` | notification state, one per account (`usage-monitor-state.json` before 0.9.1) |
+| `~/.claude/scripts/usage-monitor-backoff.<key>.json` | pause after HTTP 401/403/429, one per account (exists only while one runs) |
 | `~/.claude/scripts/usage-monitor-cli-refresh` | stamp: last `claude -p /usage` refresh (at most one per 5 min) |
 | `~/.claude/scripts/usage-monitor-sl-refresh` | stamp: last background refresh started by the statusline |
 | `~/.claude/scripts/usage-monitor-observed` | freshest stdin reading seen by any session, shared by all statuslines |

@@ -311,6 +311,19 @@ pick_window() { # $1 pct A, $2 reset A, $3 pct B, $4 reset B ("" = absent) -> "p
   fi
 }
 
+# The signed-in account (account + organization, see usage-monitor.sh): the
+# cache and the shared observations are used only when they belong to it, so
+# switching accounts never shows the previous account's numbers.
+ACCOUNT=""
+[ -x "$JQ" ] && ACCOUNT=$("$JQ" -r '.oauthAccount // {} | select(.accountUuid != null)
+  | "\(.accountUuid):\(.organizationUuid // "")"' "$HOME/.claude.json" 2>/dev/null)
+CACHE_MINE=0
+if [ -f "$CACHE" ] && [ -x "$JQ" ]; then
+  if [ -z "$ACCOUNT" ] || "$JQ" -e --arg a "$ACCOUNT" '(._account // $a) == $a' "$CACHE" >/dev/null 2>&1; then
+    CACHE_MINE=1
+  fi
+fi
+
 LIMITS=""
 s=""; w=""; r5=0; r7=0; f="-1"; rf=0; SCOPED_MODEL=""
 s5=""; s7=""; sr5=0; sr7=0; cs=""; cw=""; cr5=0; cr7=0
@@ -343,15 +356,17 @@ if [ -x "$JQ" ]; then
     if mkdir "$obs_lock" 2>/dev/null; then have_obs_lock=1; break; fi
     sleep 0.02
   done
-  o5=""; o7=""; or5=0; or7=0
-  [ -f "$observed" ] && read -r o5 or5 o7 or7 < "$observed"
+  o5=""; o7=""; or5=0; or7=0; oacct=""
+  [ -f "$observed" ] && read -r oacct o5 or5 o7 or7 < "$observed"
+  # Another account's reading (or a pre-0.9.1 line without one) is not ours.
+  if [ "$oacct" != "${ACCOUNT:--}" ]; then o5=""; o7=""; or5=0; or7=0; fi
   [ "${o5:-}" = "-" ] && o5=""
   [ "${o7:-}" = "-" ] && o7=""
   read -r m5 mr5 <<< "$(pick_window "$s5" "${sr5:-0}" "$o5" "${or5:-0}")"
   read -r m7 mr7 <<< "$(pick_window "$s7" "${sr7:-0}" "$o7" "${or7:-0}")"
-  merged="${m5:--} ${mr5:-0} ${m7:--} ${mr7:-0}"
+  merged="${ACCOUNT:--} ${m5:--} ${mr5:-0} ${m7:--} ${mr7:-0}"
   if [ "$have_obs_lock" = "1" ]; then
-    if [ "$merged" != "${o5:--} ${or5:-0} ${o7:--} ${or7:-0}" ]; then
+    if [ "$merged" != "${oacct:--} ${o5:--} ${or5:-0} ${o7:--} ${or7:-0}" ]; then
       tmp_obs=$(mktemp "$observed.XXXXXX" 2>/dev/null) \
         && printf '%s\n' "$merged" > "$tmp_obs" && mv -f "$tmp_obs" "$observed" 2>/dev/null
       [ -n "${tmp_obs:-}" ] && rm -f "$tmp_obs" 2>/dev/null
@@ -359,7 +374,7 @@ if [ -x "$JQ" ]; then
     rmdir "$obs_lock" 2>/dev/null
   fi
   s5="${m5:-}"; sr5="${mr5:-0}"; s7="${m7:-}"; sr7="${mr7:-0}"
-  if [ -f "$CACHE" ]; then
+  if [ "$CACHE_MINE" = "1" ]; then
     # The cache stores resets_at as ISO 8601. The scoped limit is shown only
     # while its window is still open: from a cache that outlived its reset,
     # the number no longer means anything. SCOPED_MODEL goes last because it
@@ -409,6 +424,8 @@ fi
 # The stamp spaces out spawns from the many redraws of one busy minute.
 if [ "$SL_BG_REFRESH" = "1" ]; then
   cache_mtime=$(stat -f %m "$CACHE" 2>/dev/null || echo 0)
+  # Another account's cache is as good as none: refresh it for this one.
+  [ "$CACHE_MINE" = "1" ] || cache_mtime=0
   spawn_stamp="$UM_DIR/usage-monitor-sl-refresh"
   spawn_mtime=$(stat -f %m "$spawn_stamp" 2>/dev/null || echo 0)
   monitor="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/usage-monitor.sh"

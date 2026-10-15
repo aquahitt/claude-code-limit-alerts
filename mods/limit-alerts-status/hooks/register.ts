@@ -68,6 +68,25 @@ async function readJson<T>($: EngineInterface, path: string): Promise<T | undefi
   }
 }
 
+// The signed-in account as usage-monitor.sh keys it, from ~/.claude.json:
+// `id` (account:organization) tags the cache, `key` (their first 8 chars)
+// names the per-account pause file. Undefined when it cannot be read; then
+// the cache is taken as is and the untagged pause file is read, as before.
+async function currentAccount($: EngineInterface): Promise<{ id: string; key: string } | undefined> {
+  const home = await $.env.get('HOME')
+  if (!home) {
+    return undefined
+  }
+  const cfg = await readJson<{ oauthAccount?: { accountUuid?: string; organizationUuid?: string } }>(
+    $, `${home}/.claude.json`)
+  const a = cfg?.oauthAccount
+  if (!a?.accountUuid) {
+    return undefined
+  }
+  const org = a.organizationUuid ?? ''
+  return { id: `${a.accountUuid}:${org}`, key: `${a.accountUuid.slice(0, 8)}-${org.slice(0, 8)}` }
+}
+
 // The worker has no reliable local time zone, so the host's own `date` says
 // it, once per report.
 async function zoneOffset($: EngineInterface): Promise<number> {
@@ -95,17 +114,21 @@ async function buildReport($: EngineInterface, options: PluginOptions): Promise<
   let cached: ReturnType<typeof fromCache> = {}
   const report: Report = {}
 
+  const account = await currentAccount($)
   const dir = await locate($, options)
   if (dir) {
     const cachePath = `${dir}/${CACHE_FILE}`
     const cacheMtime = await mtime($, cachePath)
     const cache = cacheMtime === undefined ? undefined : await readJson<Cache>($, cachePath)
-    if (cache && cacheMtime !== undefined) {
+    // Another account's cache (after switching accounts) is not this one's.
+    const mine = !account || !cache?._account || cache._account === account.id
+    if (cache && cacheMtime !== undefined && mine) {
       cached = fromCache(cache)
       report.cacheAgeMs = Math.max(0, now - cacheMtime)
       report.scoped = freshest(cached.scoped, undefined, nowSec) as Report['scoped']
     }
-    const backoff = await readJson<{ until?: number }>($, `${dir}/${BACKOFF_FILE}`)
+    const backoffFile = account ? BACKOFF_FILE.replace(/\.json$/, `.${account.key}.json`) : BACKOFF_FILE
+    const backoff = await readJson<{ until?: number }>($, `${dir}/${backoffFile}`)
     if (typeof backoff?.until === 'number') {
       report.pausedUntil = backoff.until
     }

@@ -36,6 +36,8 @@ type CacheLimit = {
 }
 
 export type Cache = {
+  // account:organization the monitor fetched this for (usage-monitor.sh 0.9.1+)
+  _account?: string
   five_hour?: CacheWindow | null
   seven_day?: CacheWindow | null
   limits?: CacheLimit[] | null

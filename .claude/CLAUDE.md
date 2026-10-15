@@ -89,6 +89,12 @@ from the same files with no copy.
   always wins". Sessions share their freshest stdin reading through
   `usage-monitor-observed` (mkdir lock + retry), and a live request runs
   under `usage-monitor.fetch.lock` so concurrent callers share one request.
+- **Usage data is per account.** The key is `accountUuid:organizationUuid`
+  from `oauthAccount` in `~/.claude.json` (the user switches accounts; one
+  person can hold a personal plan and a Team seat). State and backoff are one
+  file per account (`*.<key>.json`, key = first 8 chars of each); the cache
+  and `usage-monitor-observed` carry the account and are ignored for any
+  other. Never add a new shared usage file without the same tag.
 - **Every hook script exits at once on `UM_INTERNAL=1`.** `usage-monitor.sh`
   sets it on its headless `claude -p /usage` refresh, which fires this
   project's own hooks; without the early exit each refresh made one more
