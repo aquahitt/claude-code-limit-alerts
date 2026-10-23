@@ -68,6 +68,12 @@ from the same files with no copy.
   instead. The bootstrap re-copies those scripts on a version change, but
   rewrites the generated wrappers on every session start — they carry the
   resolved options, which change whenever the user edits the configuration.
+- **A bootstrap older than `bin/.version` must not touch anything.** A
+  session keeps the hooks of the version it started with and re-runs its
+  bootstrap on resume, `/clear` and compaction; letting it copy or rewrite
+  made old and new sessions flip the mirror and the plist back and forth.
+  The `STALE` guard skips mirroring, wrappers and every "apply" step; only
+  removal (an option set to `false`) still runs.
 - **`statusline` and `launchd` are tri-state**, not boolean: `true` applies,
   `false` removes, unset is a no-op. The skills run the bootstrap from a plain
   shell where `CLAUDE_PLUGIN_OPTION_*` is absent, and defaulting to `false`

@@ -77,6 +77,32 @@ LANG_UM="${UM_LANG:-$(plugin_option LANG lang)}"
 OPT_WARN="$(plugin_option WARN warn)"
 OPT_CRIT="$(plugin_option CRIT crit)"
 
+# A session keeps the hooks of the plugin version it started with, and
+# SessionStart fires again on /clear, compaction and resume. A session that
+# predates an update used to copy its old scripts over the newer mirror and
+# rewrite the plist from its old template, and the next newer session copied
+# them back — the background agent ran whichever version spoke last. So a
+# bootstrap older than the mirrored copy leaves the mirror, the wrappers and
+# the agent alone. Removal (an option turned off) still goes through: taking
+# something away does not depend on the version.
+OWN_VERSION=$(cat "$ROOT/VERSION" 2>/dev/null || echo "unknown")
+MIRRORED_VERSION=$(cat "$BIN/.version" 2>/dev/null || echo "")
+STALE=0
+# $1 older than $2, both dotted numbers.
+version_older() {
+  [ "$1" != "$2" ] && \
+    [ "$(printf '%s\n%s\n' "$1" "$2" | sort -V | head -n 1)" = "$1" ]
+}
+if [[ "$OWN_VERSION" =~ ^[0-9] ]] && [[ "$MIRRORED_VERSION" =~ ^[0-9] ]] && \
+   version_older "$OWN_VERSION" "$MIRRORED_VERSION"; then
+  STALE=1
+  if [ "$LANG_UM" = "en" ]; then
+    note "limit-alerts: this session runs plugin $OWN_VERSION, $MIRRORED_VERSION is installed. Restart the session to pick it up."
+  else
+    note "limit-alerts: эта сессия работает на плагине $OWN_VERSION, установлен $MIRRORED_VERSION. Перезапустите сессию, чтобы подхватить его."
+  fi
+fi
+
 # ---------------------------------------------------------------- mirroring
 
 # $1 = wrapper path, $2 = target script. The wrapper is what makes an
@@ -103,19 +129,16 @@ EOF
 }
 
 mirror() {
-  local repo_version installed_version
-  repo_version=$(cat "$ROOT/VERSION" 2>/dev/null || echo "unknown")
-  installed_version=$(cat "$BIN/.version" 2>/dev/null || echo "")
-
+  [ "$STALE" = "1" ] && return 0
   mkdir -p "$BIN" || return 1
 
   # Copying the two scripts is gated on the version — they only change when the
   # plugin does.
-  if [ "$repo_version" != "$installed_version" ]; then
+  if [ "$OWN_VERSION" != "$MIRRORED_VERSION" ]; then
     cp "$ROOT/scripts/usage-monitor.sh" "$BIN/usage-monitor.sh" || return 1
     cp "$ROOT/scripts/statusline-with-limits.sh" "$BIN/statusline-with-limits.sh" || return 1
     chmod +x "$BIN/usage-monitor.sh" "$BIN/statusline-with-limits.sh" || return 1
-    printf '%s\n' "$repo_version" > "$BIN/.version" || return 1
+    printf '%s\n' "$OWN_VERSION" > "$BIN/.version" || return 1
   fi
 
   # notify-attention.sh and compact-advisor.sh are deliberately not mirrored:
@@ -227,6 +250,7 @@ apply_statusline() {
 
   if [ "$want" = "true" ]; then
     [ "$ours" = "1" ] && return 0
+    [ "$STALE" = "1" ] && return 0
     if classic_statusline_active; then
       note_once noted_classic_statusline \
         "limit-alerts: a classic install.sh statusline is active, the plugin did not touch it. Run uninstall.sh to switch to the plugin." \
@@ -288,6 +312,7 @@ apply_launchd() {
   fi
 
   [ -x "$BIN/cron.sh" ] || return 0
+  [ "$STALE" = "1" ] && return 0
 
   # The classic agent uses the label com.claude.usage-monitor and its own state
   # directory. Two cron jobs with two anti-spam state files would notify twice
