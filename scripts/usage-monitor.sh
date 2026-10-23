@@ -504,18 +504,13 @@ to_epoch() { # $1 = ISO8601 UTC timestamp
   TZ=UTC date -jf "%Y-%m-%dT%H:%M:%S" "${1%%.*}" "+%s" 2>/dev/null
 }
 
-to_local() { # $1 = ISO8601 UTC timestamp, $2 = output format
-  local epoch
-  epoch=$(TZ=UTC date -jf "%Y-%m-%dT%H:%M:%S" "${1%%.*}" "+%s" 2>/dev/null) || { echo "?"; return; }
-  date -r "$epoch" "$2"
-}
-
 # When something happens, as a person reads it: "14:00" today, "Thu 14:00"
 # within the coming six days (a weekday is unambiguous there), the date
 # beyond. A weekly reset said as a bare "10:00" could be any of seven days.
-fmt_when() { # $1 = epoch
+fmt_when() { # $1 = epoch, "?" when unknown
   local d
   local -a days
+  [ -n "${1:-}" ] || { echo "?"; return 0; }
   if [ "$(date -r "$1" +%F)" = "$(date +%F)" ]; then
     date -r "$1" +%H:%M
   elif [ $(( $1 - $(date +%s) )) -lt 518400 ]; then
@@ -825,8 +820,16 @@ if [ "$MODE" = "status" ]; then
   [ -z "${cache_at:-}" ] && FORECASTS=$(forecasts)
   while IFS='|' read -r kind percent resets scope; do
     [ -n "$kind" ] || continue
-    reset_local=$(to_local "$resets" "+%d.%m %H:%M")
     reset_epoch=$(to_epoch "$resets")
+    # No resets_at: no window is open (the 5-hour one starts with the first
+    # message after the last one ended), so there is no reset to show.
+    if [ -z "$reset_epoch" ]; then
+      if [ "$LANG_UM" = "en" ]; then reset_part="no window open"; else reset_part="окно не открыто"; fi
+    elif [ "$LANG_UM" = "en" ]; then
+      reset_part="resets: $(date -r "$reset_epoch" "+%d.%m %H:%M")"
+    else
+      reset_part="сброс: $(date -r "$reset_epoch" "+%d.%m %H:%M")"
+    fi
     # From a stale cache, a window whose reset time has already passed has
     # rolled over since: its percent no longer says anything, so say so.
     passed=""
@@ -851,11 +854,7 @@ if [ "$MODE" = "status" ]; then
         else extra="$extra  · кончится ~$(fmt_when "$eta")"; fi
       fi
     fi
-    if [ "$LANG_UM" = "en" ]; then
-      printf "%-22s %3s%%  resets: %s%s%s\n" "$(label_for "$kind" "$scope")" "$percent" "$reset_local" "$passed" "$extra"
-    else
-      printf "%-22s %3s%%  сброс: %s%s%s\n" "$(label_for "$kind" "$scope")" "$percent" "$reset_local" "$passed" "$extra"
-    fi
+    printf "%-22s %3s%%  %s%s%s\n" "$(label_for "$kind" "$scope")" "$percent" "$reset_part" "$passed" "$extra"
   done <<< "$LIMITS"
 
   # The week split by product. These are shares of what was spent, summing
@@ -944,10 +943,10 @@ while IFS='|' read -r kind percent resets scope; do
 
   # thresholds: one notification per threshold per window
   if [ "$pct" -ge "$CRIT" ] && [ "$notified" -lt "$CRIT" ]; then
-    MESSAGES+=("$(msg_crit "$label" "$pct" "$(to_local "$resets" "+%H:%M")")")
+    MESSAGES+=("$(msg_crit "$label" "$pct" "$(fmt_when "$(to_epoch "$resets")")")")
     notified=$CRIT
   elif [ "$pct" -ge "$WARN" ] && [ "$notified" -lt "$WARN" ]; then
-    MESSAGES+=("$(msg_warn "$label" "$pct" "$(to_local "$resets" "+%H:%M")")")
+    MESSAGES+=("$(msg_warn "$label" "$pct" "$(fmt_when "$(to_epoch "$resets")")")")
     notified=$WARN
   fi
 
