@@ -941,9 +941,16 @@ acquire_lock() {
 acquire_lock || exit 0
 trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
 
-[ -f "$STATE" ] || echo '{}' > "$STATE"
+# A state that is not a JSON object — empty after a run killed mid-write, cut
+# short by a full disk, edited by hand — starts over from {}. Read as it was,
+# every field came out empty, every threshold test failed, and the same empty
+# state was written back: no notification ever again.
+NEW_STATE=$("$JQ" -c 'if type == "object" then . else error end' "$STATE" 2>/dev/null) || NEW_STATE=""
+if [ -z "$NEW_STATE" ]; then
+  [ -s "$STATE" ] && log_note "state unreadable, starting over: $STATE"
+  NEW_STATE='{}'
+fi
 MESSAGES=()
-NEW_STATE=$(cat "$STATE")
 FORECASTS=""
 [ "$FORECAST" = "1" ] && FORECASTS=$(forecasts)
 UNUSED_LEAD=86400 # the unused-limit notice: the last day of a weekly window
@@ -956,19 +963,35 @@ while IFS='|' read -r kind percent resets scope; do
   [ -n "$kind" ] || continue
   pct=${percent%%.*}
   key="$kind"
+  # Each field falls back to its default unless it has the right type, so one
+  # bad value cannot turn the threshold tests below into shell errors.
   IFS='|' read -r prev_resets prev_pct notified forecast unused <<< "$(echo "$NEW_STATE" | "$JQ" -r --arg k "$key" '
-    .[$k] // {} | [ (.resets_at // ""), (.percent // 0), (.notified // 0), (.forecast // 0), (.unused // 0) ]
+    def num: if type == "number" then floor else 0 end;
+    .[$k] | (if type == "object" then . else {} end)
+    | [ (.resets_at | if type == "string" then . else "" end),
+        (.percent | num), (.notified | num), (.forecast | num), (.unused | num) ]
     | map(tostring) | join("|")')"
   label=$(label_for "$kind" "$scope")
 
   # window rollover: resets_at moved by more than 2 min. The API recomputes
   # resets_at on every request with ±1s jitter, so a plain string comparison
   # produces false "reset" alerts and re-arms threshold notifications.
+  # A window also cannot end before its own reset time. When resets_at moves
+  # while the stored one is still ahead, the numbers came from somewhere else
+  # — another account's token, a session on an older version of this script —
+  # and announcing that as a reset sent "♻️ was 97%, now 26%" in the middle of
+  # a week and re-armed every warning. Such a reading says nothing, and its
+  # thresholds count as already announced at the level it is at — silent now,
+  # a later crossing still fires (keeping the old level could mute a window
+  # for good).
   if [ -n "$prev_resets" ]; then
     e_prev=$(to_epoch "$prev_resets" || echo 0)
     e_cur=$(to_epoch "$resets" || echo 0)
     diff=$(( e_cur - e_prev )); [ "$diff" -lt 0 ] && diff=$(( -diff ))
-    if [ "$diff" -gt 120 ]; then
+    if [ "$diff" -gt 120 ] && [ "${e_prev:-0}" -gt 0 ] && [ "$(date +%s)" -lt $(( e_prev - 120 )) ]; then
+      log_note "$kind: resets_at moved from $prev_resets to ${resets:-none} before it was due — another source, not a reset"
+      if [ "$pct" -ge "$CRIT" ]; then notified=$CRIT; elif [ "$pct" -ge "$WARN" ]; then notified=$WARN; else notified=0; fi
+    elif [ "$diff" -gt 120 ]; then
       # the window really rolled over; announce only if usage actually dropped
       if [ "${prev_pct%%.*}" -ge "$RESET_MIN" ] && [ "$pct" -lt "${prev_pct%%.*}" ]; then
         MESSAGES+=("$(msg_reset "$label" "${prev_pct%%.*}" "$pct")")
@@ -1017,9 +1040,10 @@ while IFS='|' read -r kind percent resets scope; do
     fi
   fi
 
-  NEW_STATE=$(echo "$NEW_STATE" | "$JQ" --arg k "$key" --argjson p "$pct" --arg r "$resets" --argjson n "$notified" \
+  # A failed update keeps the previous state rather than emptying it.
+  upd=$(echo "$NEW_STATE" | "$JQ" --arg k "$key" --argjson p "$pct" --arg r "$resets" --argjson n "$notified" \
     --argjson f "$forecast" --argjson u "$unused" \
-    '.[$k] = {percent: $p, resets_at: $r, notified: $n, forecast: $f, unused: $u}')
+    '.[$k] = {percent: $p, resets_at: $r, notified: $n, forecast: $f, unused: $u}' 2>/dev/null) && NEW_STATE="$upd"
 done <<< "$LIMITS"
 
 # Paid usage credits: money is being spent once the plan's limits are used
@@ -1033,7 +1057,9 @@ if [ "$SPEND_ALERT" = "1" ]; then
     | map(tostring) | join("|")' 2>/dev/null)"
   if [ -n "${sp_minor:-}" ]; then
     IFS='|' read -r sp_prev sp_notified <<< "$(echo "$NEW_STATE" | "$JQ" -r '
-      ._spend // {} | [ (.amount_minor // 0), (.notified // 0) ] | map(tostring) | join("|")')"
+      def num: if type == "number" then floor else 0 end;
+      ._spend | (if type == "object" then . else {} end)
+      | [ (.amount_minor | num), (.notified | num) ] | map(tostring) | join("|")')"
     [ "$sp_minor" -lt "$sp_prev" ] && sp_notified=0
     sp_amount=$(fmt_money "$sp_minor" "$sp_exp" "$sp_cur")
     if [ "$sp_pct" -ge "$CRIT" ] && [ "$sp_notified" -lt "$CRIT" ]; then
@@ -1043,12 +1069,17 @@ if [ "$SPEND_ALERT" = "1" ]; then
     elif [ "$sp_minor" -gt 0 ] && [ "$sp_notified" -lt 1 ]; then
       MESSAGES+=("$(msg_spend_start "$sp_amount")"); sp_notified=1
     fi
-    NEW_STATE=$(echo "$NEW_STATE" | "$JQ" --argjson a "$sp_minor" --argjson n "$sp_notified" \
-      '._spend = {amount_minor: $a, notified: $n}')
+    upd=$(echo "$NEW_STATE" | "$JQ" --argjson a "$sp_minor" --argjson n "$sp_notified" \
+      '._spend = {amount_minor: $a, notified: $n}' 2>/dev/null) && NEW_STATE="$upd"
   fi
 fi
 
-echo "$NEW_STATE" > "$STATE"
+# Written whole or not at all: a temporary file beside it, then a rename, so a
+# run killed mid-write leaves the previous state instead of an empty file.
+if printf '%s' "$NEW_STATE" | "$JQ" -e 'type == "object"' >/dev/null 2>&1; then
+  printf '%s\n' "$NEW_STATE" > "$STATE.$$.tmp" 2>/dev/null && mv -f "$STATE.$$.tmp" "$STATE" 2>/dev/null \
+    || rm -f "$STATE.$$.tmp"
+fi
 
 if [ "${#MESSAGES[@]}" -gt 0 ]; then
   BODY=$(printf '%s\n' "${MESSAGES[@]}")

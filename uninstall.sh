@@ -75,6 +75,8 @@ rm -f "$SCRIPTS_DIR"/auto-resume-*.lock
 # Per-account files (0.9.1+): state and pause, one pair per signed-in account,
 # and the state file of <= 0.9.0 if it was retired by hand.
 rm -f "$SCRIPTS_DIR"/usage-monitor-state.*.json "$SCRIPTS_DIR"/usage-monitor-backoff.*.json
+# The temporary file a state write goes through (0.12.0+), left by a killed run.
+rm -f "$SCRIPTS_DIR"/usage-monitor-state*.json.*.tmp
 # History of readings (the forecast's ground): one file per account, and an
 # untagged one when there was no OAuth sign-in.
 rm -f "$SCRIPTS_DIR"/usage-history.jsonl "$SCRIPTS_DIR"/usage-history.*.jsonl \
