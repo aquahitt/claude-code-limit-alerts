@@ -15,7 +15,7 @@ or finishes a task.
 
 ```
 🟡 Session (5h) limit: 82%, resets at 18:00
-🔴 Week (all models) limit: 96% — almost exhausted, resets at 10:00
+🔴 Week (all models) limit: 96% — almost exhausted, resets at Sat 10:00
 ♻️ Session (5h) limit was reset (was 96%, now 3%)
 ⏳ Week (all models) limit: 46% — at this pace it runs out ~Thu 14:00, resets Sat 10:00
 💳 Paid usage credits are being spent: $4.20
