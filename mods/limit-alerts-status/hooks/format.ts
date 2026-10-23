@@ -83,7 +83,8 @@ export function fromCache(cache: Cache): Reading {
   const shares = (cache.seven_day_breakdown?.rows ?? [])
     .filter(row => typeof row.percent === 'number' && row.percent > 0 && row.key)
     .map(row => ({ key: row.key!, name: row.display_name ?? row.key!, percent: row.percent! }))
-  if (shares.length > 0) {
+  // "Claude Code 100%" says nothing: the split is worth a line from two products.
+  if (shares.length >= 2) {
     reading.breakdown = shares
   }
   const used = cache.spend?.used
@@ -108,6 +109,18 @@ export function paceExpected(resetsAt: number | undefined, nowSec: number): numb
   }
   const elapsed = nowSec - (resetsAt - len)
   return elapsed >= len / 14 && elapsed <= len ? Math.floor((elapsed * 100) / len) : undefined
+}
+
+// Where a weekly window ends up at its reset if the rest of the week goes like
+// the part already gone (usage-monitor.sh pace_projected). Below 100, the
+// difference resets unused.
+export function paceProjected(percent: number, resetsAt: number | undefined, nowSec: number): number | undefined {
+  const len = 7 * 86400
+  if (resetsAt === undefined) {
+    return undefined
+  }
+  const elapsed = nowSec - (resetsAt - len)
+  return elapsed >= len / 14 && elapsed <= len ? Math.floor((Math.floor(percent) * len) / elapsed) : undefined
 }
 
 export function formatMoney(s: Spend): string {
@@ -180,6 +193,7 @@ const T = {
     none: 'Нет данных о лимитах: в этой сессии ещё не было ответа API, а кэша монитора нет.',
     paused: (at: string) => `⏸ Монитор приостановил запросы к endpoint лимитов до ${at} (после ответа 429).`,
     onPace: (p: number) => `по графику ${p}%`,
+    unused: (p: number) => `к сбросу ~${p}% (останется ${100 - p}%)`,
     breakdown: (parts: string) => `Расход недели по продуктам: ${parts}`,
     product: { claude_code: 'Claude Code', chat: 'чаты', cowork: 'Cowork', other: 'прочее' } as Record<string, string>,
     spend: (amount: string, p: number) => `💳 Платные usage credits: ${amount} (${p}% лимита расходов)`,
@@ -205,6 +219,7 @@ const T = {
     none: "No usage data: no API response in this session yet, and no monitor cache.",
     paused: (at: string) => `⏸ The monitor paused requests to the usage endpoint until ${at} (after an HTTP 429).`,
     onPace: (p: number) => `on pace: ${p}%`,
+    unused: (p: number) => `~${p}% by reset (${100 - p}% left unused)`,
     breakdown: (parts: string) => `Weekly usage by product: ${parts}`,
     product: {} as Record<string, string>,
     spend: (amount: string, p: number) => `💳 Paid usage credits: ${amount} (${p}% of the spending limit)`,
@@ -258,7 +273,12 @@ function line(label: string, w: Window, lang: Lang, t: Thresholds, nowSec: numbe
   const expected = weekly && !(w.resetsAt !== undefined && w.resetsAt <= nowSec)
     ? paceExpected(w.resetsAt, nowSec)
     : undefined
-  const pace = expected === undefined ? '' : ` · ${l.onPace(expected)}`
+  let pace = expected === undefined ? '' : ` · ${l.onPace(expected)}`
+  // 5 or more points behind: say how much would reset unused.
+  const projected = expected === undefined ? undefined : paceProjected(w.percent, w.resetsAt, nowSec)
+  if (expected !== undefined && projected !== undefined && Math.floor(w.percent) + 5 <= expected && projected < 100) {
+    pace += ` · ${l.unused(projected)}`
+  }
   return `${mark}${label}: ${Math.floor(w.percent)}%${reset}${pace}`
 }
 

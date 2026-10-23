@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { CommandRunInput, On, SessionRateLimit } from 'claude-code'
 
-import { formatMoney, freshest, fromCache, paceExpected, parseOffset, renderReport } from './format'
+import { formatMoney, freshest, fromCache, paceExpected, paceProjected, parseOffset, renderReport } from './format'
 
 const T = { warn: 80, crit: 95 }
 // 2026-10-10 12:00:00 UTC
@@ -80,6 +80,18 @@ describe('report', () => {
     expect(formatMoney({ amountMinor: 500, exponent: 0, currency: 'JPY', percent: 0 })).toBe('500 JPY')
   })
 
+  test('a week behind pace says how much resets unused', () => {
+    // 4 of 7 days gone: on pace is 57%, 20% now projects to 35% at the reset
+    expect(paceProjected(20, NOW_S + 3 * 86400, NOW_S)).toBe(35)
+    const behind = renderReport({ seven: { percent: 20, resetsAt: NOW_S + 3 * 86400, from: 'cache' } }, 'ru', T, NOW, MSK)
+    expect(behind).toContain('Неделя (все модели): 20% — сброс 13.10 15:00 (через 3 д) · по графику 57% · к сбросу ~35% (останется 65%)')
+    const en = renderReport({ seven: { percent: 20, resetsAt: NOW_S + 3 * 86400, from: 'cache' } }, 'en', T, NOW, 0)
+    expect(en).toContain('· on pace: 57% · ~35% by reset (65% left unused)')
+    // within 5 points of the pace: no projection
+    const near = renderReport({ seven: { percent: 54, resetsAt: NOW_S + 3 * 86400, from: 'cache' } }, 'ru', T, NOW, MSK)
+    expect(near).not.toContain('к сбросу')
+  })
+
   test('picks the fresher reading of a window', () => {
     const r = NOW_S + 3600
     // same window: usage only grows, so the higher percent is the later one
@@ -110,9 +122,14 @@ describe('report', () => {
       seven_day_breakdown: { rows: [{ key: 'claude_code', display_name: 'Claude Code', percent: 100 },
         { key: 'chat', display_name: 'Chats', percent: 0 }] },
     })
-    // nothing spent is not a credits line; a product at 0% is not listed
+    // nothing spent is not a credits line; one product (others at 0%) is no split
     expect(extra.spend).toBeUndefined()
-    expect(extra.breakdown).toEqual([{ key: 'claude_code', name: 'Claude Code', percent: 100 }])
+    expect(extra.breakdown).toBeUndefined()
+    const two = fromCache({ seven_day_breakdown: { rows: [
+      { key: 'claude_code', display_name: 'Claude Code', percent: 90 },
+      { key: 'chat', display_name: 'Chats', percent: 10 },
+      { key: 'cowork', display_name: 'Cowork', percent: 0 }] } })
+    expect(two.breakdown?.map(s => s.key)).toEqual(['claude_code', 'chat'])
   })
 })
 
