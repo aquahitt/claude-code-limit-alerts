@@ -141,6 +141,9 @@ On every check, for each limit:
    level in this window → 🔴. Else if `percent ≥ UM_WARN` (80) → 🟡.
    `notified` stores the highest announced threshold, so each fires at most
    once per window.
+3. **Forecast** — if at the current pace the window runs out before it resets
+   (see below) and it has not reached `UM_CRIT` yet → ⏳, once per window
+   (`forecast` in the state; cleared with `notified` on a reset).
 
 Multiple messages from one check are combined into a single notification.
 
@@ -217,6 +220,96 @@ endpoint that is failing, and the Stop hooks would banner a session nobody sees.
 Обновление файла состояния идёт под блокировкой: иначе одновременные запуски
 (Stop-хук, `SessionStart`, launchd) читали бы одно состояние и присылали одно
 предупреждение дважды.
+
+## History and forecast / История и прогноз
+
+Every new reading — a live answer of the endpoint, or Claude Code's own
+`cachedUsageUtilization` taken as a fallback — is appended to
+`usage-history.<key>.jsonl` in the state directory, one file per account like
+the state:
+
+```json
+{"t": 1792784649, "s": "api", "w": {"session": [34, 1792801800], "weekly_all": [98, 1792933200]}}
+```
+
+`t` is when the reading was taken (for the fallback, its `fetchedAtMs`), `w`
+maps each limit kind to `[percent, resets_at]`, with `resets_at` as epoch
+seconds rounded to the minute — the API's ±1s jitter would otherwise make
+every reading look new. A line is written only when something changed, or at
+least every 30 minutes while readings arrive, so a quiet stretch is recorded
+as quiet rather than as a gap. Readings older than the last line are dropped.
+Past 2 MB the file is cut to its last 12,000 lines — weeks of history.
+
+The forecast reads the last 3,000 lines. For each window it takes samples from
+the same window only (`resets_at` within 2 minutes) and a rate from:
+
+- **session (5h):** the earliest sample of the last hour, if it is at least
+  15 minutes old and the window has grown by at least 5 points since;
+- **weekly:** the earliest sample of the last 24 hours, if it is at least 20
+  hours old — a day's rate includes nights and breaks; otherwise, once the
+  window is a day old, its average since it opened. Not below 25%, where a
+  few points extrapolate to nonsense.
+
+It reports a window only if the projected time is at least 10 minutes (5h) or
+3 hours (weekly) before the reset. Whole-percent readings arrive in bursts;
+these conditions handle that instead of smoothing, and the margin keeps a
+forecast hovering around the reset from flapping. No forecast is better than
+a false one.
+
+**Pace** needs no history: the share of a weekly window that has elapsed is
+where usage would be if the week were spent evenly. `status` and `/limits`
+show it as "on pace: 38%" next to the percent, the statusline as `▲8` when the
+window is 5 or more points ahead. Not for the 5-hour window, and not in a
+window's first half-day, when the comparison is noise. A linear pace is
+pessimistic for someone who works only on weekdays; it is a reference line,
+not a forecast.
+
+The endpoint also returns a `severity` per limit (`normal` / `warning`). The
+monitor does not use it: its thresholds are not documented, and `UM_WARN` /
+`UM_CRIT` already cover the same ground under the user's control.
+
+Каждый новый замер пишется в `usage-history.<key>.jsonl` (только при
+изменении или раз в 30 минут). Прогноз берёт темп за последний час (5ч) или
+за сутки (неделя) и говорит, только если лимит кончится заметно раньше сброса.
+Темп недели — без истории: сравнение с долей прошедшей недели.
+
+## Paid credits and the weekly split / Платные credits и разбивка недели
+
+Two more fields of the usage response:
+
+- `spend` — paid usage credits spent past the plan's limits
+  (`used.amount_minor`, `used.exponent`, `used.currency`, `percent` of the
+  spending limit). 💳 when spending starts, then at `UM_WARN` / `UM_CRIT`
+  percent; state is `_spend` in the state file, and a smaller amount than the
+  stored one means a new billing period and re-arms all three. `status` and
+  `/limits` show the amount once it is above zero. `UM_SPEND_ALERT=0` turns
+  the notification off.
+- `seven_day_breakdown.rows` — the week split by product (`claude_code`,
+  `chat`, `cowork`, `other`). Shares of what was spent, summing to 100, not
+  shares of the limit. Shown in `status` and `/limits`, products at 0%
+  omitted.
+
+Both are undocumented like the rest of the endpoint: a missing field just
+means no line and no notification. The fallback through `~/.claude.json` does
+not carry them.
+
+`spend` — платные credits (уведомление при начале расхода и на порогах),
+`seven_day_breakdown` — доли расхода недели по продуктам.
+
+## Doctor / Диагностика
+
+`usage-monitor.sh doctor` (the `limit-alerts:doctor` skill in the plugin)
+checks the installation from files only — no request to the endpoint, so it
+is safe during a pause: `jq`, the Keychain token (presence, plan, expiry —
+never the token), the account key, the age and owner of the cache, an active
+pause, the last failed check if nothing has succeeded since, the history,
+the launchd agent (plist, `StartInterval`, whether it is loaded), the
+statusline, the classic hooks, a plugin and a classic install active at once,
+and a plugin session older than the installed copy. A script cannot read
+whether macOS allows banners, so `doctor --notify` sends a test one.
+
+`doctor` проверяет установку по файлам, без запросов к endpoint;
+`doctor --notify` присылает тестовое уведомление.
 
 ## Limit reset: Claude Code does it itself / Сброс лимита
 

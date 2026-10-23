@@ -74,6 +74,10 @@ rm -f "$SCRIPTS_DIR"/auto-resume-*.lock
 # Per-account files (0.9.1+): state and pause, one pair per signed-in account,
 # and the state file of <= 0.9.0 if it was retired by hand.
 rm -f "$SCRIPTS_DIR"/usage-monitor-state.*.json "$SCRIPTS_DIR"/usage-monitor-backoff.*.json
+# History of readings (the forecast's ground): one file per account, and an
+# untagged one when there was no OAuth sign-in.
+rm -f "$SCRIPTS_DIR"/usage-history.jsonl "$SCRIPTS_DIR"/usage-history.*.jsonl \
+      "$SCRIPTS_DIR"/usage-history.*.jsonl.tmp "$SCRIPTS_DIR"/usage-history.jsonl.tmp
 # usage-monitor.lock is a directory, and normally exists only while a check
 # runs; a run killed mid-update can leave it behind.
 rmdir "$SCRIPTS_DIR/usage-monitor.lock" "$SCRIPTS_DIR/usage-monitor.fetch.lock" \

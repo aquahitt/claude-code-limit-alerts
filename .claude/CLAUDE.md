@@ -58,7 +58,7 @@ from the same files with no copy.
   `.claude-plugin/marketplace.json` — single-entry catalogue.
 - `hooks/hooks.json` — Stop / SessionStart / Notification. Every command passes
   `UM_STATE_DIR="${CLAUDE_PLUGIN_DATA}"` explicitly.
-- `skills/{status,setup,uninstall}/SKILL.md` — thin triggers; logic stays in
+- `skills/{status,setup,uninstall,doctor}/SKILL.md` — thin triggers; logic stays in
   bash. (`.claude/skills/` is a different thing entirely — those are
   development skills for this repository and are not shipped to plugin users.)
 - `scripts/plugin-bootstrap.sh` — `SessionStart` hook.
