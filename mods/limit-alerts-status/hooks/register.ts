@@ -126,6 +126,8 @@ async function buildReport($: EngineInterface, options: PluginOptions): Promise<
       cached = fromCache(cache)
       report.cacheAgeMs = Math.max(0, now - cacheMtime)
       report.scoped = freshest(cached.scoped, undefined, nowSec) as Report['scoped']
+      report.breakdown = cached.breakdown
+      report.spend = cached.spend
     }
     const backoffFile = account ? BACKOFF_FILE.replace(/\.json$/, `.${account.key}.json`) : BACKOFF_FILE
     const backoff = await readJson<{ until?: number }>($, `${dir}/${backoffFile}`)

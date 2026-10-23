@@ -11,17 +11,28 @@ export type Thresholds = { warn: number; crit: number }
 // says which source a window in the report came from.
 export type Window = { percent: number; resetsAt?: number; from?: 'session' | 'cache' }
 
+// The week split by product: shares of what was spent, summing to 100.
+export type Share = { key: string; name: string; percent: number }
+
+// Paid usage credits spent past the plan's limits.
+export type Spend = { amountMinor: number; exponent: number; currency: string; percent: number }
+
 export type Reading = {
   five?: Window
   seven?: Window
   // The weekly model-scoped limit; only usage-monitor-cache.json has it.
   scoped?: Window & { model: string }
+  // Like the scoped limit, these two exist only in the monitor's cache.
+  breakdown?: Share[]
+  spend?: Spend
 }
 
 export type Report = {
   five?: Window
   seven?: Window
   scoped?: Window & { model: string }
+  breakdown?: Share[]
+  spend?: Spend
   cacheAgeMs?: number
   // usage-monitor.sh's pause after an HTTP 429, epoch seconds.
   pausedUntil?: number
@@ -41,6 +52,13 @@ export type Cache = {
   five_hour?: CacheWindow | null
   seven_day?: CacheWindow | null
   limits?: CacheLimit[] | null
+  spend?: {
+    percent?: number | null
+    used?: { amount_minor?: number | null; exponent?: number | null; currency?: string | null } | null
+  } | null
+  seven_day_breakdown?: {
+    rows?: { key?: string; display_name?: string; percent?: number | null }[] | null
+  } | null
 }
 
 function epoch(iso: string | null | undefined): number | undefined {
@@ -62,7 +80,40 @@ export function fromCache(cache: Cache): Reading {
   if (typeof scoped?.percent === 'number' && model) {
     reading.scoped = { model, percent: scoped.percent, resetsAt: epoch(scoped.resets_at) }
   }
+  const shares = (cache.seven_day_breakdown?.rows ?? [])
+    .filter(row => typeof row.percent === 'number' && row.percent > 0 && row.key)
+    .map(row => ({ key: row.key!, name: row.display_name ?? row.key!, percent: row.percent! }))
+  if (shares.length > 0) {
+    reading.breakdown = shares
+  }
+  const used = cache.spend?.used
+  if (typeof used?.amount_minor === 'number' && used.amount_minor > 0) {
+    reading.spend = {
+      amountMinor: used.amount_minor,
+      exponent: typeof used.exponent === 'number' ? used.exponent : 2,
+      currency: used.currency ?? '',
+      percent: typeof cache.spend?.percent === 'number' ? cache.spend.percent : 0,
+    }
+  }
   return reading
+}
+
+// Where a weekly window would be if the week were spent evenly: the percent of
+// it that has elapsed (usage-monitor.sh pace_expected, same rule). Undefined
+// for the first half-day of the window, when the comparison is noise.
+export function paceExpected(resetsAt: number | undefined, nowSec: number): number | undefined {
+  const len = 7 * 86400
+  if (resetsAt === undefined) {
+    return undefined
+  }
+  const elapsed = nowSec - (resetsAt - len)
+  return elapsed >= len / 14 && elapsed <= len ? Math.floor((elapsed * 100) / len) : undefined
+}
+
+export function formatMoney(s: Spend): string {
+  const value = (s.amountMinor / 10 ** s.exponent).toFixed(s.exponent)
+  const symbol: Record<string, string> = { USD: '$', EUR: '€', GBP: '£' }
+  return symbol[s.currency] ? `${symbol[s.currency]}${value}` : `${value}${s.currency ? ` ${s.currency}` : ''}`
 }
 
 // The engine's own reading, from the last API response's headers: current
@@ -128,6 +179,10 @@ const T = {
     partCache: (age: string) => `кэш монитора (${age})`,
     none: 'Нет данных о лимитах: в этой сессии ещё не было ответа API, а кэша монитора нет.',
     paused: (at: string) => `⏸ Монитор приостановил запросы к endpoint лимитов до ${at} (после ответа 429).`,
+    onPace: (p: number) => `по графику ${p}%`,
+    breakdown: (parts: string) => `Расход недели по продуктам: ${parts}`,
+    product: { claude_code: 'Claude Code', chat: 'чаты', cowork: 'Cowork', other: 'прочее' } as Record<string, string>,
+    spend: (amount: string, p: number) => `💳 Платные usage credits: ${amount} (${p}% лимита расходов)`,
   },
   en: {
     title: 'Claude Code limits',
@@ -149,6 +204,10 @@ const T = {
     partCache: (age: string) => `the monitor's cache (${age})`,
     none: "No usage data: no API response in this session yet, and no monitor cache.",
     paused: (at: string) => `⏸ The monitor paused requests to the usage endpoint until ${at} (after an HTTP 429).`,
+    onPace: (p: number) => `on pace: ${p}%`,
+    breakdown: (parts: string) => `Weekly usage by product: ${parts}`,
+    product: {} as Record<string, string>,
+    spend: (amount: string, p: number) => `💳 Paid usage credits: ${amount} (${p}% of the spending limit)`,
   },
 } as const
 
@@ -187,7 +246,7 @@ function duration(seconds: number, lang: Lang): string {
   return rest ? `${days} ${l.day} ${rest} ${l.hour}` : `${days} ${l.day}`
 }
 
-function line(label: string, w: Window, lang: Lang, t: Thresholds, nowSec: number, offsetMin: number): string {
+function line(label: string, w: Window, lang: Lang, t: Thresholds, nowSec: number, offsetMin: number, weekly = false): string {
   const l = T[lang]
   const mark = w.percent >= t.crit ? '⛔ ' : w.percent >= t.warn ? '⚠ ' : ''
   let reset = ''
@@ -196,7 +255,11 @@ function line(label: string, w: Window, lang: Lang, t: Thresholds, nowSec: numbe
       ? ` — ${l.passed}`
       : ` — ${l.resetAt} ${clock(w.resetsAt, nowSec, offsetMin)} (${l.inPrefix} ${duration(w.resetsAt - nowSec, lang)})`
   }
-  return `${mark}${label}: ${Math.floor(w.percent)}%${reset}`
+  const expected = weekly && !(w.resetsAt !== undefined && w.resetsAt <= nowSec)
+    ? paceExpected(w.resetsAt, nowSec)
+    : undefined
+  const pace = expected === undefined ? '' : ` · ${l.onPace(expected)}`
+  return `${mark}${label}: ${Math.floor(w.percent)}%${reset}${pace}`
 }
 
 export function renderReport(r: Report, lang: Lang, t: Thresholds, nowMs: number, offsetMin: number): string {
@@ -206,8 +269,12 @@ export function renderReport(r: Report, lang: Lang, t: Thresholds, nowMs: number
 
   const lines: string[] = [l.title]
   if (r.five) lines.push(line(l.five, r.five, lang, t, nowSec, offsetMin))
-  if (r.seven) lines.push(line(l.seven, r.seven, lang, t, nowSec, offsetMin))
-  if (r.scoped) lines.push(line(l.scoped(r.scoped.model), r.scoped, lang, t, nowSec, offsetMin))
+  if (r.seven) lines.push(line(l.seven, r.seven, lang, t, nowSec, offsetMin, true))
+  if (r.scoped) lines.push(line(l.scoped(r.scoped.model), r.scoped, lang, t, nowSec, offsetMin, true))
+  if (r.breakdown?.length) {
+    lines.push(l.breakdown(r.breakdown.map(s => `${l.product[s.key] ?? s.name} ${Math.floor(s.percent)}%`).join(', ')))
+  }
+  if (r.spend) lines.push(l.spend(formatMoney(r.spend), Math.floor(r.spend.percent)))
 
   const shown = [[l.five, r.five], [l.seven, r.seven]] as const
   const froms = shown.filter(([, w]) => w).map(([, w]) => w!.from)
