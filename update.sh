@@ -58,6 +58,12 @@ INSTALLED_VERSION="unknown"
 OPTIONS_FILE="$SCRIPTS_DIR/.limit-alerts-options"
 OPT_COMPACT_ADVISOR=0
 OPT_GUARD_FANOUT=0
+# Numbers chosen at install time; empty means the script's own default.
+opt_value() { sed -n "s/^$1=\([0-9][0-9]*\)$/\1/p" "$OPTIONS_FILE" 2>/dev/null | tail -n 1; }
+OPT_WARN=$(opt_value WARN)
+OPT_CRIT=$(opt_value CRIT)
+OPT_INTERVAL=$(opt_value INTERVAL)
+OPT_COMPACT_WARN=$(opt_value COMPACT_WARN)
 if [ -f "$OPTIONS_FILE" ]; then
   if grep -q '^COMPACT_ADVISOR=1$' "$OPTIONS_FILE"; then OPT_COMPACT_ADVISOR=1; fi
   if grep -q '^GUARD_FANOUT=1$' "$OPTIONS_FILE"; then OPT_GUARD_FANOUT=1; fi
@@ -65,7 +71,8 @@ fi
 
 if [ -f "$PLIST" ]; then
   NEW_PLIST_TMP=$(mktemp)
-  generate_plist "$REPO_DIR/launchd/com.claude.usage-monitor.plist.template" "$NEW_PLIST_TMP" "$PROXY_ARG" "$PLIST"
+  generate_plist "$REPO_DIR/launchd/com.claude.usage-monitor.plist.template" "$NEW_PLIST_TMP" "$PROXY_ARG" "$PLIST" \
+    "" "" "" "$OPT_INTERVAL"
   if ! diff -q "$NEW_PLIST_TMP" "$PLIST" >/dev/null 2>&1; then
     if [ "$DRY_RUN" = "1" ]; then
       echo "    would reload launchd agent (plist changed)"
@@ -164,6 +171,21 @@ else
     if grep -q '^MODEL_HINT=1$' "$OPTIONS_FILE" 2>/dev/null; then
       sed -i '' 's/\${UM_MODEL_HINT:-0}/\${UM_MODEL_HINT:-1}/' "$SCRIPTS_DIR/usage-monitor.sh"
     fi
+  fi
+  if [ -n "$OPT_WARN" ]; then
+    for f in usage-monitor.sh statusline-with-limits.sh; do
+      [ -f "$SCRIPTS_DIR/$f" ] && sed -i '' "s/\${UM_WARN:-80}/\${UM_WARN:-$OPT_WARN}/" "$SCRIPTS_DIR/$f"
+    done
+  fi
+  if [ -n "$OPT_CRIT" ]; then
+    for f in usage-monitor.sh statusline-with-limits.sh fanout-guard.sh; do
+      [ -f "$SCRIPTS_DIR/$f" ] && sed -i '' "s/\${UM_CRIT:-95}/\${UM_CRIT:-$OPT_CRIT}/" "$SCRIPTS_DIR/$f"
+    done
+  fi
+  if [ -n "$OPT_COMPACT_WARN" ]; then
+    for f in compact-advisor.sh statusline-with-limits.sh; do
+      [ -f "$SCRIPTS_DIR/$f" ] && sed -i '' "s/\${UM_COMPACT_WARN:-70}/\${UM_COMPACT_WARN:-$OPT_COMPACT_WARN}/" "$SCRIPTS_DIR/$f"
+    done
   fi
   # Installed only with --guard-fanout, and switched on there (see install.sh).
   if [ -f "$SCRIPTS_DIR/fanout-guard.sh" ]; then

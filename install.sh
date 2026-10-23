@@ -17,6 +17,13 @@
 #   --no-launchd      skip the background launchd agent
 #   --no-attention    skip "needs your attention" notifications
 #   --lang en|ru      notification language (default: ru)
+#   --warn <percent>  🟡 threshold (default: 80)
+#   --crit <percent>  🔴 threshold (default: 95)
+#   --interval <sec>  background check interval of the launchd agent,
+#                     60..3600 (default: 92)
+#   --compact-warn <percent>
+#                     /compact advisor threshold, % of the context window
+#                     (default: 70)
 #   --proxy <url>|""  proxy for the launchd agent (default: auto-detected
 #                     from HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY, case-
 #                     insensitive, in the current shell); "" disables
@@ -65,6 +72,10 @@ WITH_GUARD_FANOUT=0
 WITH_MODEL_HINT=0
 AUTO_COMPACT_WINDOW=""
 LANG_UM="ru"
+OPT_WARN=""
+OPT_CRIT=""
+OPT_INTERVAL=""
+OPT_COMPACT_WARN=""
 PROXY_URL=""
 PROXY_FLAG_SET=0
 while [ $# -gt 0 ]; do
@@ -87,6 +98,15 @@ while [ $# -gt 0 ]; do
     --lang)
       [ $# -ge 2 ] || { echo "--lang requires a value" >&2; exit 1; }
       shift; LANG_UM="$1" ;;
+    --warn|--crit|--interval|--compact-warn)
+      [ $# -ge 2 ] || { echo "$1 requires a value" >&2; exit 1; }
+      case "$1" in
+        --warn) OPT_WARN="$2" ;;
+        --crit) OPT_CRIT="$2" ;;
+        --interval) OPT_INTERVAL="$2" ;;
+        --compact-warn) OPT_COMPACT_WARN="$2" ;;
+      esac
+      shift ;;
     --proxy)
       [ $# -ge 2 ] || { echo "--proxy requires a value" >&2; exit 1; }
       shift; PROXY_URL="$1"; PROXY_FLAG_SET=1 ;;
@@ -105,6 +125,25 @@ if [ -n "$AUTO_COMPACT_WINDOW" ]; then
     echo "--auto-compact-window must be between 100000 and 1000000 tokens" >&2
     exit 1
   fi
+fi
+
+# $1 flag, $2 value, $3..$4 allowed range.
+check_number() {
+  case "$2" in
+    ''|*[!0-9]*) echo "$1 expects a whole number between $3 and $4" >&2; exit 1 ;;
+  esac
+  if [ "$2" -lt "$3" ] || [ "$2" -gt "$4" ]; then
+    echo "$1 expects a whole number between $3 and $4" >&2
+    exit 1
+  fi
+}
+[ -n "$OPT_WARN" ] && check_number --warn "$OPT_WARN" 1 99
+[ -n "$OPT_CRIT" ] && check_number --crit "$OPT_CRIT" 1 99
+[ -n "$OPT_INTERVAL" ] && check_number --interval "$OPT_INTERVAL" 60 3600
+[ -n "$OPT_COMPACT_WARN" ] && check_number --compact-warn "$OPT_COMPACT_WARN" 1 99
+if [ "${OPT_WARN:-80}" -ge "${OPT_CRIT:-95}" ]; then
+  echo "--warn (${OPT_WARN:-80}) must be below --crit (${OPT_CRIT:-95})" >&2
+  exit 1
 fi
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -158,6 +197,24 @@ cp "$REPO_DIR/VERSION" "$SCRIPTS_DIR/.limit-alerts-version"
 if [ "$LANG_UM" != "ru" ]; then
   for f in usage-monitor.sh statusline-with-limits.sh notify-attention.sh compact-advisor.sh fanout-guard.sh; do
     [ -f "$SCRIPTS_DIR/$f" ] && sed -i '' "s/\${UM_LANG:-ru}/\${UM_LANG:-$LANG_UM}/" "$SCRIPTS_DIR/$f"
+  done
+fi
+
+# Thresholds the same way: the launchd agent runs these copies without the
+# user's environment, so a default baked in here is the only one it sees.
+if [ -n "$OPT_WARN" ]; then
+  for f in usage-monitor.sh statusline-with-limits.sh; do
+    sed -i '' "s/\${UM_WARN:-80}/\${UM_WARN:-$OPT_WARN}/" "$SCRIPTS_DIR/$f"
+  done
+fi
+if [ -n "$OPT_CRIT" ]; then
+  for f in usage-monitor.sh statusline-with-limits.sh fanout-guard.sh; do
+    [ -f "$SCRIPTS_DIR/$f" ] && sed -i '' "s/\${UM_CRIT:-95}/\${UM_CRIT:-$OPT_CRIT}/" "$SCRIPTS_DIR/$f"
+  done
+fi
+if [ -n "$OPT_COMPACT_WARN" ]; then
+  for f in compact-advisor.sh statusline-with-limits.sh; do
+    [ -f "$SCRIPTS_DIR/$f" ] && sed -i '' "s/\${UM_COMPACT_WARN:-70}/\${UM_COMPACT_WARN:-$OPT_COMPACT_WARN}/" "$SCRIPTS_DIR/$f"
   done
 fi
 
@@ -244,6 +301,10 @@ fi
 # a not-yet-installed one — file presence says nothing about autostart.
 cat > "$SCRIPTS_DIR/.limit-alerts-options" <<EOF
 LANG=$LANG_UM
+WARN=$OPT_WARN
+CRIT=$OPT_CRIT
+INTERVAL=$OPT_INTERVAL
+COMPACT_WARN=$OPT_COMPACT_WARN
 COMPACT_ADVISOR=$WITH_COMPACT_ADVISOR
 AUTO_COMPACT_WINDOW_SET=$AUTO_COMPACT_WINDOW_SET
 STATUSLINE_MODEL=$WITH_STATUSLINE_MODEL
@@ -278,11 +339,12 @@ if [ "$WITH_LAUNCHD" = "1" ]; then
   mkdir -p "$HOME/Library/LaunchAgents"
   EXISTING_PLIST_ARG=""
   [ -f "$PLIST" ] && EXISTING_PLIST_ARG="$PLIST"
-  generate_plist "$REPO_DIR/launchd/com.claude.usage-monitor.plist.template" "$PLIST" "$PROXY_ARG" "$EXISTING_PLIST_ARG"
+  generate_plist "$REPO_DIR/launchd/com.claude.usage-monitor.plist.template" "$PLIST" "$PROXY_ARG" "$EXISTING_PLIST_ARG" \
+    "" "" "" "$OPT_INTERVAL"
   print_proxy_status "$PLIST" "$PROXY_ARG"
   launchctl bootout "gui/$(id -u)/com.claude.usage-monitor" 2>/dev/null || true
   launchctl bootstrap "gui/$(id -u)" "$PLIST"
-  echo "    Agent loaded (checks every 92 seconds)"
+  echo "    Agent loaded (checks every ${OPT_INTERVAL:-92} seconds)"
 fi
 
 echo

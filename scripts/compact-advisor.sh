@@ -35,6 +35,7 @@ case "${BASH_SOURCE[0]}" in "${CLAUDE_PLUGIN_ROOT:-/nonexistent}"/*) FROM_PLUGIN
 if [ "$FROM_PLUGIN" = "1" ]; then
   [ "${CLAUDE_PLUGIN_OPTION_COMPACT_ADVISOR:-true}" = "false" ] && exit 0
   [ -n "${CLAUDE_PLUGIN_OPTION_LANG:-}" ] && LANG_UM="${UM_LANG:-$CLAUDE_PLUGIN_OPTION_LANG}"
+  [ -n "${CLAUDE_PLUGIN_OPTION_COMPACT_WARN:-}" ] && WARN="${UM_COMPACT_WARN:-$CLAUDE_PLUGIN_OPTION_COMPACT_WARN}"
 fi
 # Resolution order: an explicit override, then the directory install.sh
 # creates. In plugin mode hooks.json and the generated wrappers always pass
