@@ -15,6 +15,8 @@
   плагин `limit-alerts` и в marketplace не входит: API модов пока в early
   access. Запуск: `claude --plugin-dir mods/limit-alerts-status`.
 
+## [0.9.3] - 2026-10-23
+
 ### Fixed
 
 - Сессия, запущенная до обновления плагина, откатывала его обратно: на
