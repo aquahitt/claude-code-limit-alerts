@@ -30,7 +30,9 @@ project lives in shell scripts installed into `~/.claude/`.
 - `scripts/usage-monitor.sh`, `scripts/notify-attention.sh`,
   `scripts/statusline-with-limits.sh`, `scripts/compact-advisor.sh` — the
   files actually copied into `~/.claude/scripts/` and run by
-  hooks/launchd/statusline. `compact-advisor.sh` is a `Stop` hook.
+  hooks/launchd/statusline. `compact-advisor.sh` is a `Stop` hook;
+  `fanout-guard.sh` is a `PreToolUse` hook (matcher `Agent|Task`), off by
+  default — `install.sh` installs it only with `--guard-fanout`.
 - **Don't reintroduce auto-resume.** 0.5.0 removed `auto-resume.sh` because
   Claude Code does it natively ("Continue automatically at usage limit" in
   `/config`, `autoContinueAtUsageLimit` in `~/.claude/settings.json`). An
@@ -56,7 +58,7 @@ from the same files with no copy.
 
 - `.claude-plugin/plugin.json` — manifest and `userConfig`;
   `.claude-plugin/marketplace.json` — single-entry catalogue.
-- `hooks/hooks.json` — Stop / SessionStart / Notification. Every command passes
+- `hooks/hooks.json` — Stop / SessionStart / Notification / PreToolUse. Every command passes
   `UM_STATE_DIR="${CLAUDE_PLUGIN_DATA}"` explicitly.
 - `skills/{status,setup,uninstall,doctor}/SKILL.md` — thin triggers; logic stays in
   bash. (`.claude/skills/` is a different thing entirely — those are

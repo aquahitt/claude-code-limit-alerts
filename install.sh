@@ -34,6 +34,10 @@
 #   --no-spend-alert  no 💳 notification about paid usage credits
 #   --no-statusline-pace
 #                     no ▲N / ▼N weekly pace next to the statusline percent
+#   --guard-fanout    ask before a subagent starts once a weekly limit is at
+#                     the critical threshold (off by default)
+#   --model-hint      suggest another model when a model-scoped weekly limit
+#                     is at the critical threshold (off by default)
 #   --auto-compact-window <tokens>
 #                     set Claude Code's own auto-compact threshold in
 #                     ~/.claude/settings.json (100000..1000000). Off by
@@ -55,6 +59,8 @@ WITH_SUBAGENT_MODEL=1
 WITH_FORECAST=1
 WITH_SPEND_ALERT=1
 WITH_STATUSLINE_PACE=1
+WITH_GUARD_FANOUT=0
+WITH_MODEL_HINT=0
 AUTO_COMPACT_WINDOW=""
 LANG_UM="ru"
 PROXY_URL=""
@@ -70,6 +76,8 @@ while [ $# -gt 0 ]; do
     --no-forecast) WITH_FORECAST=0 ;;
     --no-spend-alert) WITH_SPEND_ALERT=0 ;;
     --no-statusline-pace) WITH_STATUSLINE_PACE=0 ;;
+    --guard-fanout) WITH_GUARD_FANOUT=1 ;;
+    --model-hint) WITH_MODEL_HINT=1 ;;
     --auto-compact-window)
       [ $# -ge 2 ] || { echo "--auto-compact-window requires a value" >&2; exit 1; }
       shift; AUTO_COMPACT_WINDOW="$1" ;;
@@ -122,6 +130,15 @@ if [ "$WITH_COMPACT_ADVISOR" = "1" ]; then
 else
   rm -f "$SCRIPTS_DIR/compact-advisor.sh"
 fi
+# Installed only when asked for, and then switched on: the script's own
+# default is off, for the plugin, where the hook is always registered.
+if [ "$WITH_GUARD_FANOUT" = "1" ]; then
+  cp "$REPO_DIR/scripts/fanout-guard.sh" "$SCRIPTS_DIR/"
+  chmod +x "$SCRIPTS_DIR/fanout-guard.sh"
+  sed -i '' 's/\${UM_GUARD_FANOUT:-0}/\${UM_GUARD_FANOUT:-1}/' "$SCRIPTS_DIR/fanout-guard.sh"
+else
+  rm -f "$SCRIPTS_DIR/fanout-guard.sh"
+fi
 
 # Leftovers from <= 0.4.0, which shipped an auto-resume worker. Claude Code
 # now waits out a limit and continues the session on its own ("Continue
@@ -136,7 +153,7 @@ cp "$REPO_DIR/VERSION" "$SCRIPTS_DIR/.limit-alerts-version"
 
 # persist language choice by changing the env default (only if not ru)
 if [ "$LANG_UM" != "ru" ]; then
-  for f in usage-monitor.sh statusline-with-limits.sh notify-attention.sh compact-advisor.sh; do
+  for f in usage-monitor.sh statusline-with-limits.sh notify-attention.sh compact-advisor.sh fanout-guard.sh; do
     [ -f "$SCRIPTS_DIR/$f" ] && sed -i '' "s/\${UM_LANG:-ru}/\${UM_LANG:-$LANG_UM}/" "$SCRIPTS_DIR/$f"
   done
 fi
@@ -160,6 +177,9 @@ fi
 if [ "$WITH_STATUSLINE_PACE" = "0" ]; then
   sed -i '' 's/\${UM_STATUSLINE_PACE:-1}/\${UM_STATUSLINE_PACE:-0}/' "$SCRIPTS_DIR/statusline-with-limits.sh"
 fi
+if [ "$WITH_MODEL_HINT" = "1" ]; then
+  sed -i '' 's/\${UM_MODEL_HINT:-0}/\${UM_MODEL_HINT:-1}/' "$SCRIPTS_DIR/usage-monitor.sh"
+fi
 
 echo "==> Updating $SETTINGS"
 [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
@@ -182,6 +202,14 @@ else
   # this actually unregisters the Stop hook a previous run added — otherwise
   # the hook keeps firing against a script install.sh just deleted above.
   remove_hook_matching "compact-advisor.sh"
+fi
+
+if [ "$WITH_GUARD_FANOUT" = "1" ]; then
+  register_fanout_guard_hook
+  echo "    Subagent guard hook added: PreToolUse (Agent)"
+else
+  # Same as the compact advisor: a re-install without the flag takes it away.
+  remove_hook_matching "fanout-guard.sh"
 fi
 
 # Carry forward a previous run's AUTO_COMPACT_WINDOW_SET when this run omits
@@ -217,6 +245,8 @@ SUBAGENT_MODEL=$WITH_SUBAGENT_MODEL
 FORECAST=$WITH_FORECAST
 SPEND_ALERT=$WITH_SPEND_ALERT
 STATUSLINE_PACE=$WITH_STATUSLINE_PACE
+GUARD_FANOUT=$WITH_GUARD_FANOUT
+MODEL_HINT=$WITH_MODEL_HINT
 EOF
 
 if [ "$WITH_STATUSLINE" = "1" ]; then

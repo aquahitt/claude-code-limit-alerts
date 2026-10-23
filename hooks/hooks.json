@@ -47,6 +47,18 @@
           }
         ]
       }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Agent|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "UM_STATE_DIR=\"${CLAUDE_PLUGIN_DATA}\" bash \"${CLAUDE_PLUGIN_ROOT}/scripts/fanout-guard.sh\"",
+            "timeout": 10
+          }
+        ]
+      }
     ]
   }
 }

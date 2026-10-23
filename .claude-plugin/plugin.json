@@ -64,6 +64,18 @@
       "description": "Shows ▲N when a weekly window runs ahead of an even pace (it runs out early) and ▼N when it lags behind (part of it resets unused).",
       "default": true
     },
+    "guard_fanout": {
+      "type": "boolean",
+      "title": "Ask before subagents near the weekly limit",
+      "description": "Once a weekly limit reaches the critical threshold, starting a subagent asks for confirmation first. Off by default.",
+      "default": false
+    },
+    "model_hint": {
+      "type": "boolean",
+      "title": "Suggest another model at a model-scoped limit",
+      "description": "Adds \"carry on with another model (/model)\" to the critical warning of a model-scoped weekly limit. Off by default.",
+      "default": false
+    },
     "statusline": {
       "type": "boolean",
       "title": "Limits in the statusline",

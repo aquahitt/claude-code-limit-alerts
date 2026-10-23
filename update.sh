@@ -57,8 +57,10 @@ INSTALLED_VERSION="unknown"
 # чего пользователь не ставил.
 OPTIONS_FILE="$SCRIPTS_DIR/.limit-alerts-options"
 OPT_COMPACT_ADVISOR=0
+OPT_GUARD_FANOUT=0
 if [ -f "$OPTIONS_FILE" ]; then
   if grep -q '^COMPACT_ADVISOR=1$' "$OPTIONS_FILE"; then OPT_COMPACT_ADVISOR=1; fi
+  if grep -q '^GUARD_FANOUT=1$' "$OPTIONS_FILE"; then OPT_GUARD_FANOUT=1; fi
 fi
 
 if [ -f "$PLIST" ]; then
@@ -89,6 +91,7 @@ echo "==> Обновление: $INSTALLED_VERSION -> $REPO_VERSION"
 
 UPDATE_FILES="usage-monitor.sh statusline-with-limits.sh notify-attention.sh"
 if [ "$OPT_COMPACT_ADVISOR" = "1" ]; then UPDATE_FILES="$UPDATE_FILES compact-advisor.sh"; fi
+if [ "$OPT_GUARD_FANOUT" = "1" ]; then UPDATE_FILES="$UPDATE_FILES fanout-guard.sh"; fi
 
 # Остатки от <= 0.4.0: авто-продолжение убрано, его делает сам Claude Code
 # («Continue automatically at usage limit» в /config). Файлы удаляются, иначе
@@ -155,6 +158,13 @@ else
     if grep -q '^SPEND_ALERT=0$' "$OPTIONS_FILE" 2>/dev/null; then
       sed -i '' 's/\${UM_SPEND_ALERT:-1}/\${UM_SPEND_ALERT:-0}/' "$SCRIPTS_DIR/usage-monitor.sh"
     fi
+    if grep -q '^MODEL_HINT=1$' "$OPTIONS_FILE" 2>/dev/null; then
+      sed -i '' 's/\${UM_MODEL_HINT:-0}/\${UM_MODEL_HINT:-1}/' "$SCRIPTS_DIR/usage-monitor.sh"
+    fi
+  fi
+  # Installed only with --guard-fanout, and switched on there (see install.sh).
+  if [ -f "$SCRIPTS_DIR/fanout-guard.sh" ]; then
+    sed -i '' 's/\${UM_GUARD_FANOUT:-0}/\${UM_GUARD_FANOUT:-1}/' "$SCRIPTS_DIR/fanout-guard.sh"
   fi
   echo "    install-time defaults re-applied"
 fi
@@ -169,6 +179,9 @@ else
   fi
   if [ "$OPT_COMPACT_ADVISOR" = "1" ] && [ -f "$SCRIPTS_DIR/compact-advisor.sh" ]; then
     register_compact_advisor_hook
+  fi
+  if [ "$OPT_GUARD_FANOUT" = "1" ] && [ -f "$SCRIPTS_DIR/fanout-guard.sh" ]; then
+    register_fanout_guard_hook
   fi
   echo "    hooks reconciled (backup: $SETTINGS.bak.limit-alerts-update)"
 fi

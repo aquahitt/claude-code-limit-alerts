@@ -327,6 +327,8 @@ switch in every installation, and it reaches every place the feature runs:
 | ⏳ forecast | `UM_FORECAST=0` | `forecast` | `--no-forecast` |
 | 💳 credits | `UM_SPEND_ALERT=0` | `spend_alert` | `--no-spend-alert` |
 | `▲N` / `▼N` | `UM_STATUSLINE_PACE=0` | `statusline_pace` | `--no-statusline-pace` |
+| subagent guard (off) | `UM_GUARD_FANOUT=1` | `guard_fanout` | `--guard-fanout` |
+| model hint (off) | `UM_MODEL_HINT=1` | `model_hint` | `--model-hint` |
 
 An environment variable reaches hooks and the statusline but not the launchd
 agent, which starts without the user's environment. So the plugin passes a
@@ -338,6 +340,35 @@ records it in `.limit-alerts-options`, and `update.sh` re-applies it.
 Прогноз, уведомление о credits и темп в statusline выключаются в любой
 установке — переменной, опцией плагина или флагом `install.sh` — и
 выключаются везде, включая фоновый агент.
+
+## Safeguards / Страховки
+
+Both are off by default: the project warns, it does not manage sessions, and
+these two act at the moment of a decision — a question or a hint, never an
+automatic action.
+
+**Subagent guard** — `fanout-guard.sh`, a `PreToolUse` hook with the matcher
+`Agent|Task`. Once a weekly window is at `UM_CRIT`, it answers
+`permissionDecision: "ask"` with the reason, so Claude Code asks before the
+subagent starts. Weekly windows only: a 5-hour one resets within hours and
+Claude Code continues on its own (`autoContinueAtUsageLimit`); a week that
+runs out stops work for days, and subagents — several at once, each with its
+own context — spend it fastest. `weekly_all` always counts; `weekly_scoped`
+only when `tool_input.model` names that model (a subagent on the session
+model cannot be matched — the hook input does not carry the session model).
+It reads only the monitor's cache, never the endpoint, and stays silent when
+the cache is older than 15 minutes or another account's. The plugin always
+registers the hook and the script exits at once unless the option is on;
+`install.sh` installs and registers it only with `--guard-fanout`, and a
+re-install without the flag removes both.
+
+**Model hint** — a line added to the 🔴 of a model-scoped weekly limit:
+another model does not spend that limit. Only while `weekly_all` is below
+`UM_CRIT`, otherwise another model hits the same wall.
+
+Обе страховки выключены по умолчанию. Вопрос перед субагентом — хук
+`PreToolUse`, когда недельный лимит на `UM_CRIT`; подсказка сменить модель —
+строка к 🔴 о недельном лимите по модели.
 
 ## Limit reset: Claude Code does it itself / Сброс лимита
 

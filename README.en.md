@@ -30,6 +30,17 @@ little data, below 25% of the week, and when the margin to the reset is thin —
 a false alarm is worse than none. **Paid credits** 💳: when the plan's limits
 are used up and money starts being spent, and at 80%/95% of the spending limit.
 
+**Safeguards — off by default, on if you want them:**
+
+- *Ask before a subagent.* Once a weekly limit reaches 95%, starting a
+  subagent asks for confirmation first: subagents spend a week fastest, and a
+  week that runs out stops work for days. The decision stays yours — it is a
+  question, not a block. A model-scoped limit counts only when the subagent
+  is explicitly given that model.
+- *Suggest another model.* The 🔴 for a model-scoped weekly limit gets
+  "↪ You can carry on with another model (/model): it does not spend this
+  limit" — while the limit for all models still has room.
+
 **Statusline with all limit percentages** (green / yellow ≥ 80% / red ≥ 95%):
 
 ```
@@ -193,6 +204,8 @@ Configure it under `/plugin` → limit-alerts → Configure:
 | `forecast` | on | ⏳ forecast: a limit runs out before it resets |
 | `spend_alert` | on | 💳 notifications about paid usage credits |
 | `statusline_pace` | on | `▲N` / `▼N` — weekly pace in the statusline |
+| `guard_fanout` | off | ask before a subagent once the week is at 95% |
+| `model_hint` | off | suggest another model at a model-scoped limit |
 | `statusline` | **off** | limit percentages in the statusline |
 | `launchd` | **off** | background agent, checks every 92 seconds |
 
@@ -239,6 +252,8 @@ Installer flags:
 | `--no-forecast` | no ⏳ forecast |
 | `--no-spend-alert` | no 💳 notifications about paid credits |
 | `--no-statusline-pace` | no `▲N` / `▼N` in the statusline |
+| `--guard-fanout` | ask before a subagent once the week is at 95% |
+| `--model-hint` | suggest another model at a model-scoped limit |
 
 Restart Claude Code afterwards (or open `/hooks` once) so the new hooks are
 picked up. A backup of `~/.claude/settings.json` is created before any change.
@@ -286,6 +301,8 @@ the defaults at the top of `usage-monitor.sh`):
 | `UM_STATUSLINE_RESET` | `1` | reset time next to a window that reached the warning threshold: `5h 84% ↻00:20`, the date `↻15.10` when it is over a day away |
 | `UM_FORECAST` | `1` | ⏳ notification when at the current pace a limit runs out before it resets |
 | `UM_SPEND_ALERT` | `1` | 💳 notification about paid usage credits |
+| `UM_GUARD_FANOUT` | `0` | `1` — ask before a subagent once a weekly limit is at `UM_CRIT` |
+| `UM_MODEL_HINT` | `0` | `1` — suggest another model in the 🔴 for a model-scoped weekly limit |
 | `UM_STATUSLINE_PACE` | `1` | `▲N` / `▼N` next to a weekly window 5 or more points ahead of or behind an even pace |
 | `UM_STATUSLINE_BG_REFRESH` | `1` | the statusline refreshes a stale cache in the background (what keeps usage from other devices visible without the background agent) |
 | `UM_STATUSLINE_REFRESH_AFTER` | `120` | cache age, seconds, after which the statusline starts a refresh |

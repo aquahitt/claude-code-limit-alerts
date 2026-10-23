@@ -48,7 +48,22 @@ register_compact_advisor_hook() {
     command: "bash \"$HOME/.claude/scripts/compact-advisor.sh\"", timeout: 10}')"
 }
 
-# Удаляет из hooks (Stop/SessionStart/Notification) все записи, чья команда
+# Регистрирует PreToolUse (matcher Agent|Task) -> fanout-guard.sh. У
+# PreToolUse свой matcher, поэтому хук живёт в отдельной записи, а не в первой
+# записи события, как у add_hook. Идемпотентно. Требует $JQ, $SETTINGS.
+register_fanout_guard_hook() {
+  local cmd='bash "$HOME/.claude/scripts/fanout-guard.sh"' updated
+  updated=$("$JQ" --arg cmd "$cmd" '
+    .hooks //= {} |
+    .hooks.PreToolUse //= [] |
+    if ([.hooks.PreToolUse[].hooks[]?.command] | index($cmd)) then .
+    else .hooks.PreToolUse += [{matcher: "Agent|Task",
+      hooks: [{type: "command", command: $cmd, timeout: 10}]}] end
+  ' "$SETTINGS")
+  echo "$updated" > "$SETTINGS"
+}
+
+# Удаляет из hooks (Stop/SessionStart/Notification/PreToolUse) все записи, чья команда
 # содержит подстроку $1 (например "compact-advisor.sh") — форма фильтра как
 # в uninstall.sh. Нужна install.sh, чтобы повторная установка с --no-* флагом
 # действительно отключала хук, а не просто переставала переустанавливать
@@ -57,7 +72,7 @@ remove_hook_matching() {
   local pattern="$1" updated
   updated=$("$JQ" --arg p "$pattern" '
     .hooks //= {} |
-    (.hooks.Stop, .hooks.SessionStart, .hooks.Notification) |=
+    (.hooks.Stop, .hooks.SessionStart, .hooks.Notification, .hooks.PreToolUse) |=
       (if . then map(.hooks |= map(select(.command // "" | contains($p) | not)))
              | map(select(.hooks | length > 0))
        else . end) |
