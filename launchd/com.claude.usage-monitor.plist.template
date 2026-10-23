@@ -12,7 +12,7 @@
     </array>
 __ENV_VARS__
     <key>StartInterval</key>
-    <integer>92</integer>
+    <integer>__INTERVAL__</integer>
     <key>RunAtLoad</key>
     <true/>
     <key>StandardErrorPath</key>

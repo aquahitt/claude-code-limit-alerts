@@ -18,14 +18,17 @@ xml_escape() {
 # $1 = путь к шаблону, $2 = путь для записи, $3 = explicit_proxy
 # ("" | URL | "__DISABLE__"), $4 = путь к уже установленному plist (можно "").
 # $5..$7 — label, путь к исполняемому скрипту и файл ошибок. Необязательные:
-# без них подставляются значения классической установки, поэтому install.sh и
-# update.sh, вызывающие функцию четырьмя аргументами, не меняются. Плагин
-# передаёт все семь и получает агента под собственным label.
+# без них (или с пустыми) подставляются значения классической установки.
+# Плагин передаёт свои и получает агента под собственным label.
+# $8 — интервал проверки в секундах (StartInterval), по умолчанию 92. Он
+# задаётся явно, а не сохраняется из прежнего plist: иначе нельзя отличить
+# выбор пользователя от умолчания старой версии (до 0.9.0 — 300).
 generate_plist() {
   local template="$1" out="$2" explicit="${3:-}" existing="${4:-}"
   local label="${5:-com.claude.usage-monitor}"
   local script="${6:-$HOME/.claude/scripts/usage-monitor.sh}"
   local errlog="${7:-/tmp/claude-usage-monitor.err}"
+  local interval="${8:-92}"
   local existing_json="{}"
   if [ -n "$existing" ] && [ -f "$existing" ]; then
     existing_json=$(plutil -convert json -o - "$existing" 2>/dev/null) || existing_json="{}"
@@ -74,6 +77,7 @@ ${env_lines}    </dict>
         line="${line//__LABEL__/$label}"
         line="${line//__SCRIPT__/$script}"
         line="${line//__ERRLOG__/$errlog}"
+        line="${line//__INTERVAL__/$interval}"
         printf '%s\n' "$line" >> "$out"
         ;;
     esac

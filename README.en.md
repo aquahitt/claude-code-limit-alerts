@@ -104,7 +104,7 @@ If live data can't be fetched (for example, the endpoint answers 429),
   Keychain — no extra API keys or logins required.
 - **Claude Code hooks** (`Stop` + `SessionStart`) surface warnings right in the
   UI after each turn and on session start.
-- A **launchd agent** checks limits every 92 seconds in the background — the
+- A **launchd agent** checks limits in the background (every 92 seconds by default) — the
   window-reset notification arrives even when Claude Code is closed.
 - **Two ways to run it.** The plugin registers its own hooks and keeps state in
   its own data directory; `install.sh` copies the scripts into
@@ -204,6 +204,7 @@ Configure it under `/plugin` → limit-alerts → Configure:
 | `lang` | `ru` | notification language (`ru` / `en`) |
 | `warn` | `80` | 🟡 threshold, percent |
 | `crit` | `95` | 🔴 threshold, percent |
+| `compact_warn` | `70` | `/compact` signal threshold, % of context |
 | `attention` | on | "needs your attention" notifications |
 | `compact_advisor` | on | the `/compact` signal |
 | `forecast` | on | ⏳ forecast: a limit runs out before it resets |
@@ -213,7 +214,10 @@ Configure it under `/plugin` → limit-alerts → Configure:
 | `guard_fanout` | off | ask before a subagent once the week is at 95% |
 | `model_hint` | off | suggest another model at a model-scoped limit |
 | `statusline` | **off** | limit percentages in the statusline |
-| `launchd` | **off** | background agent, checks every 92 seconds |
+| `statusline_model` | on | model segment in the statusline |
+| `subagent_model` | on | subagent model in the statusline |
+| `launchd` | **off** | background agent |
+| `interval` | `92` | agent check interval, seconds (60–3600) |
 
 The last two are off on purpose: they write outside the plugin — into
 `~/.claude/settings.json` and `~/Library/LaunchAgents`. Turn them on in the
@@ -251,6 +255,9 @@ Installer flags:
 | `--no-launchd` | skip the background agent (hooks only) |
 | `--no-attention` | skip "needs your attention" notifications |
 | `--lang en` | English notifications (default is Russian) |
+| `--warn N` / `--crit N` | 🟡 and 🔴 thresholds, % (80 and 95 by default) |
+| `--interval N` | background agent check interval, seconds, 60–3600 (92 by default) |
+| `--compact-warn N` | `/compact` signal threshold, % of context (70 by default) |
 | `--no-compact-advisor` | skip the `/compact` signal |
 | `--auto-compact-window <tokens>` | move Claude Code's own auto-compact threshold (100000–1000000); affects every session |
 | `--no-statusline-model` | statusline shows limits only — no model / effort / context / subagent segment |
@@ -288,37 +295,55 @@ for what changed between versions.
 
 ## Configuration
 
-Thresholds and behavior are controlled by environment variables (or by editing
-the defaults at the top of `usage-monitor.sh`):
+Every feature can be configured in either installation, and the setting
+applies everywhere the feature runs — hooks, the statusline and the background
+agent:
+
+- **plugin** — `/plugin` → limit-alerts → Configure;
+- **`install.sh`** — a flag at install time; `update.sh` remembers it;
+- **variable** — in the environment or in `env` of `~/.claude/settings.json`.
+  Hooks and the statusline see it, the background agent does not: launchd
+  starts it without your environment. For the agent, use the plugin option or
+  the flag.
+
+| What | Plugin | `install.sh` | Variable | Default |
+|---|---|---|---|---|
+| message language | `lang` | `--lang en` | `UM_LANG` | `ru` |
+| 🟡 threshold, % | `warn` | `--warn N` | `UM_WARN` | `80` |
+| 🔴 threshold, % | `crit` | `--crit N` | `UM_CRIT` | `95` |
+| "needs your attention" | `attention` | `--no-attention` | — | on |
+| `/compact` signal | `compact_advisor` | `--no-compact-advisor` | — | on |
+| its threshold, % of context (and yellow `ctx`) | `compact_warn` | `--compact-warn N` | `UM_COMPACT_WARN` | `70` |
+| ⏳ forecast | `forecast` | `--no-forecast` | `UM_FORECAST=0` | on |
+| 💳 paid credits | `spend_alert` | `--no-spend-alert` | `UM_SPEND_ALERT=0` | on |
+| ⌛ unused limit | `unused_alert` | `--no-unused-alert` | `UM_UNUSED_ALERT=0` | on |
+| ask before a subagent | `guard_fanout` | `--guard-fanout` | `UM_GUARD_FANOUT=1` | off |
+| suggest another model | `model_hint` | `--model-hint` | `UM_MODEL_HINT=1` | off |
+| statusline | `statusline` | `--no-statusline` | — | plugin: off, `install.sh`: on |
+| model segment in the statusline | `statusline_model` | `--no-statusline-model` | `UM_STATUSLINE_MODEL=0` | on |
+| subagent model in the statusline | `subagent_model` | `--no-subagent-model` | `UM_SUBAGENT_MODEL=0` | on |
+| `▲N` / `▼N` — weekly pace | `statusline_pace` | `--no-statusline-pace` | `UM_STATUSLINE_PACE=0` | on |
+| background agent | `launchd` | `--no-launchd` | — | plugin: off, `install.sh`: on |
+| agent interval, s (60–3600) | `interval` | `--interval N` | — | `92` |
+
+If the endpoint answers 401, 403 or 429, the agent pauses on its own (5
+minutes and up) whatever the interval. An interval below 92 seconds means more
+requests to the endpoint and a higher chance of a 429.
+
+Fine-tuning is by variable only: it is rarely needed, and more entries in the
+plugin menu and more flags would make the useful ones harder to find.
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `UM_WARN` | `80` | 🟡 warning threshold, % |
-| `UM_CRIT` | `95` | 🔴 critical threshold, % |
 | `UM_RESET_MIN` | `50` | minimum usage for a window reset to be announced |
 | `UM_CACHE_TTL` | `60` | API response cache lifetime, seconds |
-| `UM_LANG` | `ru` | message language: `ru` or `en` |
-| `UM_COMPACT_WARN` | `70` | `/compact` signal threshold, % of context |
 | `UM_CONTEXT_WINDOW` | `200000` | context window used for the percentage (overridden by `autoCompactWindow` in `settings.json`) |
-| `UM_STATUSLINE_MODEL` | `1` | show the model segment in the statusline |
 | `UM_STATUSLINE_CTX` | `1` | show `ctx N%` inside the model segment |
-| `UM_SUBAGENT_MODEL` | `1` | show the model of a running subagent |
-| `UM_SUBAGENT_TTL` | `180` | how recently a subagent must have written for it to count as running, seconds |
 | `UM_STATUSLINE_ADVISOR` | `1` | show the advisor model (`/advisor`) |
 | `UM_STATUSLINE_RESET` | `1` | reset time next to a window that reached the warning threshold: `5h 84% ↻00:20`, the date `↻15.10` when it is over a day away |
-| `UM_FORECAST` | `1` | ⏳ notification when at the current pace a limit runs out before it resets |
-| `UM_SPEND_ALERT` | `1` | 💳 notification about paid usage credits |
-| `UM_UNUSED_ALERT` | `1` | ⌛ reminder in the week's last day when 20+ points would reset unused |
-| `UM_GUARD_FANOUT` | `0` | `1` — ask before a subagent once a weekly limit is at `UM_CRIT` |
-| `UM_MODEL_HINT` | `0` | `1` — suggest another model in the 🔴 for a model-scoped weekly limit |
-| `UM_STATUSLINE_PACE` | `1` | `▲N` / `▼N` next to a weekly window 5 or more points ahead of or behind an even pace |
+| `UM_SUBAGENT_TTL` | `180` | how recently a subagent must have written for it to count as running, seconds |
 | `UM_STATUSLINE_BG_REFRESH` | `1` | the statusline refreshes a stale cache in the background (what keeps usage from other devices visible without the background agent) |
 | `UM_STATUSLINE_REFRESH_AFTER` | `120` | cache age, seconds, after which the statusline starts a refresh |
-
-The background check interval is `StartInterval` (seconds, 92 by default) in
-`~/Library/LaunchAgents/com.claude.usage-monitor.plist`. If the endpoint answers
-401, 403 or 429, the agent pauses on its own (5 minutes and up) instead of
-asking every 92 seconds.
 
 ## Troubleshooting
 
