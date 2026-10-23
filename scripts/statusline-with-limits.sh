@@ -457,8 +457,25 @@ if [ "$SL_BG_REFRESH" = "1" ]; then
   spawn_stamp="$UM_DIR/usage-monitor-sl-refresh"
   spawn_mtime=$(stat -f %m "$spawn_stamp" 2>/dev/null || echo 0)
   monitor="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/usage-monitor.sh"
+  # During the monitor's 401/403/429 pause a refresh makes no request, and the
+  # only thing it can still pick up is Claude Code's own cachedUsageUtilization
+  # in ~/.claude.json — the standing data source of accounts the endpoint
+  # keeps refusing. With nothing newer there than the cache, it would only log
+  # "fallback unavailable" every 30 seconds, so it is not started. The pause
+  # file is per account (usage-monitor.sh BACKOFF).
+  refresh_useful() {
+    local key backoff until fetched
+    key=$(printf '%s' "$ACCOUNT" | awk -F: 'NF { print substr($1, 1, 8) "-" substr($2, 1, 8) }')
+    backoff="$UM_DIR/usage-monitor-backoff${key:+.$key}.json"
+    until=$("$JQ" -r '.until // 0' "$backoff" 2>/dev/null || echo 0)
+    [ "${until:-0}" -gt "$NOW_S" ] 2>/dev/null || return 0
+    fetched=$("$JQ" -r '(.oauthAccount.accountUuid // null) as $me
+      | .cachedUsageUtilization // {} | select($me == null or .accountUuid == $me)
+      | (.fetchedAtMs // 0) / 1000 | floor' "$HOME/.claude.json" 2>/dev/null || echo 0)
+    [ "${fetched:-0}" -gt "$cache_mtime" ] 2>/dev/null && [ $(( NOW_S - fetched )) -lt 3600 ]
+  }
   if [ $(( NOW_S - cache_mtime )) -ge "$SL_REFRESH_AFTER" ] \
-     && [ $(( NOW_S - spawn_mtime )) -ge 30 ] && [ -f "$monitor" ]; then
+     && [ $(( NOW_S - spawn_mtime )) -ge 30 ] && [ -f "$monitor" ] && [ -x "$JQ" ] && refresh_useful; then
     touch "$spawn_stamp" 2>/dev/null || true
     ( nohup bash "$monitor" hook </dev/null >/dev/null 2>&1 & )
   fi
