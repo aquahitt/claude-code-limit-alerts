@@ -29,6 +29,11 @@
 #   --no-subagent-model
 #                     statusline shows the session model but not the model of
 #                     a running subagent
+#   --no-forecast     no ⏳ notification when a limit would run out before it
+#                     resets
+#   --no-spend-alert  no 💳 notification about paid usage credits
+#   --no-statusline-pace
+#                     no ▲N / ▼N weekly pace next to the statusline percent
 #   --auto-compact-window <tokens>
 #                     set Claude Code's own auto-compact threshold in
 #                     ~/.claude/settings.json (100000..1000000). Off by
@@ -47,6 +52,9 @@ WITH_ATTENTION=1
 WITH_COMPACT_ADVISOR=1
 WITH_STATUSLINE_MODEL=1
 WITH_SUBAGENT_MODEL=1
+WITH_FORECAST=1
+WITH_SPEND_ALERT=1
+WITH_STATUSLINE_PACE=1
 AUTO_COMPACT_WINDOW=""
 LANG_UM="ru"
 PROXY_URL=""
@@ -59,6 +67,9 @@ while [ $# -gt 0 ]; do
     --no-compact-advisor) WITH_COMPACT_ADVISOR=0 ;;
     --no-statusline-model) WITH_STATUSLINE_MODEL=0 ;;
     --no-subagent-model) WITH_SUBAGENT_MODEL=0 ;;
+    --no-forecast) WITH_FORECAST=0 ;;
+    --no-spend-alert) WITH_SPEND_ALERT=0 ;;
+    --no-statusline-pace) WITH_STATUSLINE_PACE=0 ;;
     --auto-compact-window)
       [ $# -ge 2 ] || { echo "--auto-compact-window requires a value" >&2; exit 1; }
       shift; AUTO_COMPACT_WINDOW="$1" ;;
@@ -138,6 +149,17 @@ fi
 if [ "$WITH_SUBAGENT_MODEL" = "0" ]; then
   sed -i '' 's/\${UM_SUBAGENT_MODEL:-1}/\${UM_SUBAGENT_MODEL:-0}/' "$SCRIPTS_DIR/statusline-with-limits.sh"
 fi
+# The launchd agent runs the same installed copy without the user's
+# environment, so a switch baked in here is the only one it ever sees.
+if [ "$WITH_FORECAST" = "0" ]; then
+  sed -i '' 's/\${UM_FORECAST:-1}/\${UM_FORECAST:-0}/' "$SCRIPTS_DIR/usage-monitor.sh"
+fi
+if [ "$WITH_SPEND_ALERT" = "0" ]; then
+  sed -i '' 's/\${UM_SPEND_ALERT:-1}/\${UM_SPEND_ALERT:-0}/' "$SCRIPTS_DIR/usage-monitor.sh"
+fi
+if [ "$WITH_STATUSLINE_PACE" = "0" ]; then
+  sed -i '' 's/\${UM_STATUSLINE_PACE:-1}/\${UM_STATUSLINE_PACE:-0}/' "$SCRIPTS_DIR/statusline-with-limits.sh"
+fi
 
 echo "==> Updating $SETTINGS"
 [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
@@ -192,6 +214,9 @@ COMPACT_ADVISOR=$WITH_COMPACT_ADVISOR
 AUTO_COMPACT_WINDOW_SET=$AUTO_COMPACT_WINDOW_SET
 STATUSLINE_MODEL=$WITH_STATUSLINE_MODEL
 SUBAGENT_MODEL=$WITH_SUBAGENT_MODEL
+FORECAST=$WITH_FORECAST
+SPEND_ALERT=$WITH_SPEND_ALERT
+STATUSLINE_PACE=$WITH_STATUSLINE_PACE
 EOF
 
 if [ "$WITH_STATUSLINE" = "1" ]; then

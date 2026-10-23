@@ -123,7 +123,7 @@ if [ -f "$OPTIONS_FILE" ]; then
 fi
 
 if [ "$DRY_RUN" = "1" ]; then
-  echo "    would re-apply install-time defaults (--lang / statusline model flags)"
+  echo "    would re-apply install-time defaults (--lang / statusline and notification flags)"
 else
   if [ -n "$OPT_LANG" ] && [ "$OPT_LANG" != "ru" ]; then
     # shellcheck disable=SC2086  # deliberate word splitting over a space-separated list
@@ -140,6 +140,20 @@ else
     if grep -q '^SUBAGENT_MODEL=0$' "$OPTIONS_FILE" 2>/dev/null; then
       sed -i '' 's/\${UM_SUBAGENT_MODEL:-1}/\${UM_SUBAGENT_MODEL:-0}/' \
         "$SCRIPTS_DIR/statusline-with-limits.sh"
+    fi
+    if grep -q '^STATUSLINE_PACE=0$' "$OPTIONS_FILE" 2>/dev/null; then
+      sed -i '' 's/\${UM_STATUSLINE_PACE:-1}/\${UM_STATUSLINE_PACE:-0}/' \
+        "$SCRIPTS_DIR/statusline-with-limits.sh"
+    fi
+  fi
+  # An options file from before these keys existed has neither line, and
+  # both stay on, as they were installed.
+  if [ -f "$SCRIPTS_DIR/usage-monitor.sh" ]; then
+    if grep -q '^FORECAST=0$' "$OPTIONS_FILE" 2>/dev/null; then
+      sed -i '' 's/\${UM_FORECAST:-1}/\${UM_FORECAST:-0}/' "$SCRIPTS_DIR/usage-monitor.sh"
+    fi
+    if grep -q '^SPEND_ALERT=0$' "$OPTIONS_FILE" 2>/dev/null; then
+      sed -i '' 's/\${UM_SPEND_ALERT:-1}/\${UM_SPEND_ALERT:-0}/' "$SCRIPTS_DIR/usage-monitor.sh"
     fi
   fi
   echo "    install-time defaults re-applied"

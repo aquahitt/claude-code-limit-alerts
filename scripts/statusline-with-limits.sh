@@ -43,9 +43,11 @@
 #   UM_STATUSLINE_RESET=1  0 hides the reset time shown next to a window that
 #                          has reached UM_WARN ("5ч 84% ↻00:20"; past a day
 #                          away, the date instead: "↻15.10")
-#   UM_STATUSLINE_PACE=1   0 hides how far a weekly window is ahead of an even
-#                          pace ("7д 46% ▲8": 8 points above the share of the
-#                          week that has elapsed; shown from 5 points up)
+#   UM_STATUSLINE_PACE=1   0 hides how far a weekly window is off an even pace:
+#                          "7д 46% ▲8" — 8 points above the share of the week
+#                          that has elapsed, so it runs out early; "7д 20% ▼18"
+#                          — 18 points below, so part of it resets unused.
+#                          Shown from 5 points either way
 #   UM_STATUSLINE_BG_REFRESH=1  0 stops the statusline from refreshing a stale
 #                          cache in the background (see the block near the end)
 #   UM_STATUSLINE_REFRESH_AFTER=120  cache age, seconds, that triggers it
@@ -287,11 +289,14 @@ reset_suffix() { # $1 = percent, $2 = reset epoch (0 = unknown)
   fi
 }
 
-# A weekly window ahead of an even pace gets "▲N": N points above the share
-# of the week that has elapsed (usage-monitor.sh pace_expected, same rule).
-# Being ahead is the warning sign — 46% on Monday is not 46% on Friday — so
-# being on or behind pace adds nothing, and neither does the first half-day
-# of the window, when the comparison is noise.
+# A weekly window off an even pace by 5 points or more gets an arrow: N
+# points from the share of the week that has elapsed (usage-monitor.sh
+# pace_expected, same rule). "▲N", yellow: spending faster than the week
+# allows, it runs out before the reset — 46% on Monday is not 46% on
+# Friday. "▼N", cyan: slower, part of the limit resets unused, and a
+# subscription is paid for whether it is used or not. Nothing within 5
+# points, and nothing in the window's first half-day, when the comparison
+# is noise.
 pace_suffix() { # $1 = percent, $2 = reset epoch of a weekly window
   [ "$SL_PACE" = "1" ] || return 0
   local len=604800 elapsed ahead
@@ -299,8 +304,11 @@ pace_suffix() { # $1 = percent, $2 = reset epoch of a weekly window
   elapsed=$(( $(date +%s) - ($2 - len) ))
   [ "$elapsed" -ge $(( len / 14 )) ] && [ "$elapsed" -le "$len" ] || return 0
   ahead=$(( $1 - elapsed * 100 / len ))
-  [ "$ahead" -ge 5 ] || return 0
-  printf ' %s▲%s%s' "$DIM" "$ahead" "$RST"
+  if [ "$ahead" -ge 5 ]; then
+    printf ' \033[33m▲%s%s' "$ahead" "$RST"
+  elif [ "$ahead" -le -5 ]; then
+    printf ' \033[36m▼%s%s' "$(( -ahead ))" "$RST"
+  fi
 }
 
 # Each window is taken from whichever source is fresher, decided per window:

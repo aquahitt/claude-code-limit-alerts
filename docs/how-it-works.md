@@ -258,11 +258,16 @@ a false one.
 
 **Pace** needs no history: the share of a weekly window that has elapsed is
 where usage would be if the week were spent evenly. `status` and `/limits`
-show it as "on pace: 38%" next to the percent, the statusline as `▲8` when the
-window is 5 or more points ahead. Not for the 5-hour window, and not in a
-window's first half-day, when the comparison is noise. A linear pace is
-pessimistic for someone who works only on weekdays; it is a reference line,
-not a forecast.
+show it as "on pace: 38%" next to the percent. The statusline shows how far
+off it the window is, from 5 points either way: `▲8` (yellow) ahead — it runs
+out early — and `▼18` (cyan) behind — part of it resets unused. Behind by 5
+points or more, `status` and `/limits` also project the window to its reset
+(its percent scaled by the elapsed share): "~35% by reset (65% left unused)".
+A subscription is paid for whether it is used or not, so unused limit is
+worth pointing at as much as an early run-out. Not for the 5-hour window, and
+not in a window's first half-day, when the comparison is noise. A linear pace
+is pessimistic for someone who works only on weekdays; it is a reference
+line, not a forecast.
 
 The endpoint also returns a `severity` per limit (`normal` / `warning`). The
 monitor does not use it: its thresholds are not documented, and `UM_WARN` /
@@ -286,7 +291,8 @@ Two more fields of the usage response:
   the notification off.
 - `seven_day_breakdown.rows` — the week split by product (`claude_code`,
   `chat`, `cowork`, `other`). Shares of what was spent, summing to 100, not
-  shares of the limit. Shown in `status` and `/limits`, products at 0%
+  shares of the limit. Shown in `status` and `/limits` once two or more
+  products have usage — "Claude Code 100%" says nothing — products at 0%
   omitted.
 
 Both are undocumented like the rest of the endpoint: a missing field just
@@ -310,6 +316,28 @@ whether macOS allows banners, so `doctor --notify` sends a test one.
 
 `doctor` проверяет установку по файлам, без запросов к endpoint;
 `doctor --notify` присылает тестовое уведомление.
+
+## Switches / Переключатели
+
+The forecast, the credits notification and the statusline pace each have a
+switch in every installation, and it reaches every place the feature runs:
+
+| | Environment | Plugin `userConfig` | `install.sh` |
+|---|---|---|---|
+| ⏳ forecast | `UM_FORECAST=0` | `forecast` | `--no-forecast` |
+| 💳 credits | `UM_SPEND_ALERT=0` | `spend_alert` | `--no-spend-alert` |
+| `▲N` / `▼N` | `UM_STATUSLINE_PACE=0` | `statusline_pace` | `--no-statusline-pace` |
+
+An environment variable reaches hooks and the statusline but not the launchd
+agent, which starts without the user's environment. So the plugin passes a
+switched-off option to hooks through `CLAUDE_PLUGIN_OPTION_*` and to the agent
+and the statusline through the generated wrappers in `bin/`; `install.sh`
+bakes it into the installed scripts' defaults (the same `sed` as `--lang`),
+records it in `.limit-alerts-options`, and `update.sh` re-applies it.
+
+Прогноз, уведомление о credits и темп в statusline выключаются в любой
+установке — переменной, опцией плагина или флагом `install.sh` — и
+выключаются везде, включая фоновый агент.
 
 ## Limit reset: Claude Code does it itself / Сброс лимита
 

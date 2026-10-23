@@ -46,6 +46,24 @@
       "description": "Suggests running /compact at a logical breakpoint when the context window fills up.",
       "default": true
     },
+    "forecast": {
+      "type": "boolean",
+      "title": "Run-out forecast",
+      "description": "Notifies once per window when, at the current pace, a limit runs out before it resets.",
+      "default": true
+    },
+    "spend_alert": {
+      "type": "boolean",
+      "title": "Paid credits alerts",
+      "description": "Notifies when paid usage credits start being spent, and at the warning and critical percent of the spending limit.",
+      "default": true
+    },
+    "statusline_pace": {
+      "type": "boolean",
+      "title": "Weekly pace in the statusline",
+      "description": "Shows ▲N when a weekly window runs ahead of an even pace (it runs out early) and ▼N when it lags behind (part of it resets unused).",
+      "default": true
+    },
     "statusline": {
       "type": "boolean",
       "title": "Limits in the statusline",
