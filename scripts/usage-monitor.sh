@@ -64,6 +64,9 @@ if [ "$FROM_PLUGIN" = "1" ]; then
   [ -n "${CLAUDE_PLUGIN_OPTION_LANG:-}" ] && LANG_UM="${UM_LANG:-$CLAUDE_PLUGIN_OPTION_LANG}"
   [ -n "${CLAUDE_PLUGIN_OPTION_WARN:-}" ] && WARN="${UM_WARN:-$CLAUDE_PLUGIN_OPTION_WARN}"
   [ -n "${CLAUDE_PLUGIN_OPTION_CRIT:-}" ] && CRIT="${UM_CRIT:-$CLAUDE_PLUGIN_OPTION_CRIT}"
+  # Booleans arrive as the literal strings true / false.
+  [ "${CLAUDE_PLUGIN_OPTION_FORECAST:-}" = "false" ] && FORECAST="${UM_FORECAST:-0}"
+  [ "${CLAUDE_PLUGIN_OPTION_SPEND_ALERT:-}" = "false" ] && SPEND_ALERT="${UM_SPEND_ALERT:-0}"
 fi
 
 # Resolution order: an explicit override, then the directory install.sh
@@ -549,6 +552,19 @@ pace_expected() { # $1 kind, $2 reset epoch -> percent, or nothing
   echo $(( elapsed * 100 / len ))
 }
 
+# The other side of the pace: where a weekly window ends up at its reset if
+# the rest of the week goes like the part already gone — its percent scaled
+# by the elapsed share. Below 100, the difference is limit that resets
+# unused: a subscription paid for and left idle. Same guards as above.
+pace_projected() { # $1 kind, $2 reset epoch, $3 percent -> percent, or nothing
+  local len=604800 elapsed
+  case "$1" in weekly_*) ;; *) return 0 ;; esac
+  [ "${2:-0}" -gt 0 ] 2>/dev/null || return 0
+  elapsed=$(( $(date +%s) - ($2 - len) ))
+  [ "$elapsed" -ge $(( len / 14 )) ] && [ "$elapsed" -le "$len" ] || return 0
+  echo $(( ${3%%.*} * len / elapsed ))
+}
+
 # When each window runs out at the current pace, from the history: one
 # "kind|epoch" line per window that would run out before it resets. Silence
 # otherwise — a forecast that cannot be trusted is worse than none, so the
@@ -822,6 +838,12 @@ if [ "$MODE" = "status" ]; then
       expected=$(pace_expected "$kind" "$reset_epoch")
       if [ -n "$expected" ]; then
         if [ "$LANG_UM" = "en" ]; then extra="  · on pace: ${expected}%"; else extra="  · по графику ${expected}%"; fi
+        # 5 or more points behind: say how much would reset unused.
+        projected=$(pace_projected "$kind" "$reset_epoch" "$percent")
+        if [ -n "$projected" ] && [ $(( ${percent%%.*} + 5 )) -le "$expected" ] && [ "$projected" -lt 100 ]; then
+          if [ "$LANG_UM" = "en" ]; then extra="$extra  · ~${projected}% by reset ($(( 100 - projected ))% left unused)"
+          else extra="$extra  · к сбросу ~${projected}% (останется $(( 100 - projected ))%)"; fi
+        fi
       fi
       eta=$(forecast_for "$kind" "$FORECASTS")
       if [ -n "$eta" ]; then
@@ -837,13 +859,14 @@ if [ "$MODE" = "status" ]; then
   done <<< "$LIMITS"
 
   # The week split by product. These are shares of what was spent, summing
-  # to 100 — not shares of the limit — and the line says so.
+  # to 100 — not shares of the limit — and the line says so. Only with two
+  # products or more: "Claude Code 100%" says nothing.
   BREAKDOWN=$(echo "$USAGE" | "$JQ" -r --arg lang "$LANG_UM" '
     def name: if $lang == "en" then (.display_name // .key)
       else ({claude_code: "Claude Code", chat: "чаты", cowork: "Cowork", other: "прочее"}[.key]
             // .display_name // .key) end;
     [ .seven_day_breakdown.rows[]? | select((.percent | type) == "number" and .percent > 0)
-      | "\(name) \(.percent | floor)%" ] | join(", ")' 2>/dev/null)
+      | "\(name) \(.percent | floor)%" ] | select(length >= 2) | join(", ")' 2>/dev/null)
   if [ -n "$BREAKDOWN" ]; then
     if [ "$LANG_UM" = "en" ]; then echo "Weekly usage by product: $BREAKDOWN"
     else echo "Расход недели по продуктам: $BREAKDOWN"; fi

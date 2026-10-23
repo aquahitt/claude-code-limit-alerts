@@ -36,9 +36,11 @@ are used up and money starts being spent, and at 80%/95% of the spending limit.
 [your statusline] | 5h 71% · 7d 46% ▲8 · wk Fable 4%
 ```
 
-`▲8` means the week is 8 points ahead of an even pace: 38% of the week has
-elapsed, 46% is spent. Shown from 5 points up, when you spend faster than the
-week allows.
+`▲8` (yellow) means the week is 8 points ahead of an even pace: 38% of the
+week has elapsed, 46% is spent, and at this pace the limit runs out before the
+reset. `▼18` (cyan) is the opposite, 18 points behind: part of the limit will
+reset unused, and the subscription is paid for either way. The arrow shows
+from 5 points off the pace, and not in the first 12 hours of the window.
 
 **"Needs your attention" notifications** — when Claude waits for a permission
 or a reply, or finishes a task, you get a banner with sound. The title carries
@@ -62,15 +64,17 @@ $ ~/.claude/scripts/usage-monitor.sh status
 claude-code-limit-alerts vX.Y.Z
 Session (5h)          71%  resets: 16.07 18:00  · runs out ~17:10
 Week (all models)     46%  resets: 17.07 10:00  · on pace: 38%
-Week (Fable)           4%  resets: 17.07 10:00  · on pace: 38%
+Week (Fable)           4%  resets: 17.07 10:00  · on pace: 38%  · ~10% by reset (90% left unused)
 Weekly usage by product: Claude Code 88%, Chats 12%
 ```
 
 "On pace" is where the week would be if spent evenly. "Runs out" is the
 forecast, when the limit would run out before the reset at the current pace.
-The product line gives shares of what the week has spent (Claude Code, chats,
-Cowork), not shares of the limit. If paid credits were spent, their amount
-follows.
+"~10% by reset (90% left unused)" is the opposite case: at the current pace
+about 10% will be spent by the reset and the rest is lost. The product line
+gives shares of what the week has spent (Claude Code, chats, Cowork), not
+shares of the limit; it appears once two or more products have usage. If paid
+credits were spent, their amount follows.
 
 If live data can't be fetched (for example, the endpoint answers 429),
 `status` shows the last cache marked "⚠ No live data — showing the cache from
@@ -186,6 +190,9 @@ Configure it under `/plugin` → limit-alerts → Configure:
 | `crit` | `95` | 🔴 threshold, percent |
 | `attention` | on | "needs your attention" notifications |
 | `compact_advisor` | on | the `/compact` signal |
+| `forecast` | on | ⏳ forecast: a limit runs out before it resets |
+| `spend_alert` | on | 💳 notifications about paid usage credits |
+| `statusline_pace` | on | `▲N` / `▼N` — weekly pace in the statusline |
 | `statusline` | **off** | limit percentages in the statusline |
 | `launchd` | **off** | background agent, checks every 92 seconds |
 
@@ -201,6 +208,7 @@ Plugin skills:
 | Skill | Effect |
 |---|---|
 | `/limit-alerts:status` | show current limits |
+| `/limit-alerts:doctor` | check the installation when something does not work |
 | `/limit-alerts:setup` | apply the statusline and agent settings now |
 | `/limit-alerts:uninstall` | remove the statusline and the agent before removing the plugin |
 
@@ -228,6 +236,9 @@ Installer flags:
 | `--auto-compact-window <tokens>` | move Claude Code's own auto-compact threshold (100000–1000000); affects every session |
 | `--no-statusline-model` | statusline shows limits only — no model / effort / context / subagent segment |
 | `--no-subagent-model` | statusline keeps the session model but drops the subagent model |
+| `--no-forecast` | no ⏳ forecast |
+| `--no-spend-alert` | no 💳 notifications about paid credits |
+| `--no-statusline-pace` | no `▲N` / `▼N` in the statusline |
 
 Restart Claude Code afterwards (or open `/hooks` once) so the new hooks are
 picked up. A backup of `~/.claude/settings.json` is created before any change.
@@ -275,7 +286,7 @@ the defaults at the top of `usage-monitor.sh`):
 | `UM_STATUSLINE_RESET` | `1` | reset time next to a window that reached the warning threshold: `5h 84% ↻00:20`, the date `↻15.10` when it is over a day away |
 | `UM_FORECAST` | `1` | ⏳ notification when at the current pace a limit runs out before it resets |
 | `UM_SPEND_ALERT` | `1` | 💳 notification about paid usage credits |
-| `UM_STATUSLINE_PACE` | `1` | `▲N` next to a weekly window 5 or more points ahead of an even pace |
+| `UM_STATUSLINE_PACE` | `1` | `▲N` / `▼N` next to a weekly window 5 or more points ahead of or behind an even pace |
 | `UM_STATUSLINE_BG_REFRESH` | `1` | the statusline refreshes a stale cache in the background (what keeps usage from other devices visible without the background agent) |
 | `UM_STATUSLINE_REFRESH_AFTER` | `120` | cache age, seconds, after which the statusline starts a refresh |
 

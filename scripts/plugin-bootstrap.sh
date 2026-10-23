@@ -76,6 +76,9 @@ LANG_UM="${UM_LANG:-$(plugin_option LANG lang)}"
 [ -n "$LANG_UM" ] || LANG_UM="ru"
 OPT_WARN="$(plugin_option WARN warn)"
 OPT_CRIT="$(plugin_option CRIT crit)"
+OPT_FORECAST="$(plugin_option FORECAST forecast)"
+OPT_SPEND_ALERT="$(plugin_option SPEND_ALERT spend_alert)"
+OPT_STATUSLINE_PACE="$(plugin_option STATUSLINE_PACE statusline_pace)"
 
 # A session keeps the hooks of the plugin version it started with, and
 # SessionStart fires again on /clear, compaction and resume. A session that
@@ -115,6 +118,14 @@ write_wrapper() {
   [ -n "$OPT_WARN" ] && extra="${extra}export UM_WARN=\"$OPT_WARN\"
 "
   [ -n "$OPT_CRIT" ] && extra="${extra}export UM_CRIT=\"$OPT_CRIT\"
+"
+  # Switches only when turned off: on is every script's own default. Hooks
+  # read these options themselves; the agent and the statusline get them here.
+  [ "$OPT_FORECAST" = "false" ] && extra="${extra}export UM_FORECAST=0
+"
+  [ "$OPT_SPEND_ALERT" = "false" ] && extra="${extra}export UM_SPEND_ALERT=0
+"
+  [ "$OPT_STATUSLINE_PACE" = "false" ] && extra="${extra}export UM_STATUSLINE_PACE=0
 "
   cat > "$path" <<EOF
 #!/usr/bin/env bash
