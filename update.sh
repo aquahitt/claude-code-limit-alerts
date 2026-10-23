@@ -158,6 +158,9 @@ else
     if grep -q '^SPEND_ALERT=0$' "$OPTIONS_FILE" 2>/dev/null; then
       sed -i '' 's/\${UM_SPEND_ALERT:-1}/\${UM_SPEND_ALERT:-0}/' "$SCRIPTS_DIR/usage-monitor.sh"
     fi
+    if grep -q '^UNUSED_ALERT=0$' "$OPTIONS_FILE" 2>/dev/null; then
+      sed -i '' 's/\${UM_UNUSED_ALERT:-1}/\${UM_UNUSED_ALERT:-0}/' "$SCRIPTS_DIR/usage-monitor.sh"
+    fi
     if grep -q '^MODEL_HINT=1$' "$OPTIONS_FILE" 2>/dev/null; then
       sed -i '' 's/\${UM_MODEL_HINT:-0}/\${UM_MODEL_HINT:-1}/' "$SCRIPTS_DIR/usage-monitor.sh"
     fi

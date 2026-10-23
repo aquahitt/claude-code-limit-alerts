@@ -25,10 +25,12 @@
 #            out before the window resets (see forecasts)
 #   credits 💳 — when paid usage credits start being spent, and at WARN/CRIT
 #            percent of the spending limit
+#   unused ⌛ — once per weekly window, in its last day, when at the current
+#            pace a good part of it would reset unused
 #
 # Environment overrides:
 #   UM_WARN=80  UM_CRIT=95  UM_RESET_MIN=50  UM_CACHE_TTL=60  UM_LANG=ru|en
-#   UM_FORECAST=1  UM_SPEND_ALERT=1  (0 turns that notification off)
+#   UM_FORECAST=1  UM_SPEND_ALERT=1  UM_UNUSED_ALERT=1  (0 turns it off)
 #   UM_MODEL_HINT=0  (1 adds "carry on with another model" to a model-scoped
 #                     weekly limit at CRIT)
 
@@ -48,6 +50,7 @@ CACHE_TTL="${UM_CACHE_TTL:-60}"
 LANG_UM="${UM_LANG:-ru}"
 FORECAST="${UM_FORECAST:-1}"
 SPEND_ALERT="${UM_SPEND_ALERT:-1}"
+UNUSED_ALERT="${UM_UNUSED_ALERT:-1}"
 MODEL_HINT="${UM_MODEL_HINT:-0}"
 
 # Plugin userConfig bridge. An explicit UM_* environment variable always wins;
@@ -70,6 +73,7 @@ if [ "$FROM_PLUGIN" = "1" ]; then
   # Booleans arrive as the literal strings true / false.
   [ "${CLAUDE_PLUGIN_OPTION_FORECAST:-}" = "false" ] && FORECAST="${UM_FORECAST:-0}"
   [ "${CLAUDE_PLUGIN_OPTION_SPEND_ALERT:-}" = "false" ] && SPEND_ALERT="${UM_SPEND_ALERT:-0}"
+  [ "${CLAUDE_PLUGIN_OPTION_UNUSED_ALERT:-}" = "false" ] && UNUSED_ALERT="${UM_UNUSED_ALERT:-0}"
   [ "${CLAUDE_PLUGIN_OPTION_MODEL_HINT:-}" = "true" ] && MODEL_HINT="${UM_MODEL_HINT:-1}"
 fi
 
@@ -472,6 +476,10 @@ msg_reset() { # $1 label, $2 old pct, $3 new pct
 msg_forecast() { # $1 label, $2 pct, $3 when it runs out, $4 when it resets
   if [ "$LANG_UM" = "en" ]; then echo "⏳ ${1} limit: ${2}% — at this pace it runs out ~${3}, resets ${4}"
   else echo "⏳ Лимит «${1}»: ${2}% — при таком темпе кончится ~${3}, сброс ${4}"; fi
+}
+msg_unused() { # $1 label, $2 pct, $3 when it resets, $4 percent left unused
+  if [ "$LANG_UM" = "en" ]; then echo "⌛ ${1} limit: ${2}%, resets ${3} — at this pace ~${4}% goes unused"
+  else echo "⌛ Лимит «${1}»: ${2}%, сброс ${3} — при таком темпе ~${4}% останется неиспользованным"; fi
 }
 msg_spend_start() { # $1 amount
   if [ "$LANG_UM" = "en" ]; then echo "💳 Paid usage credits are being spent: ${1}"
@@ -922,6 +930,8 @@ MESSAGES=()
 NEW_STATE=$(cat "$STATE")
 FORECASTS=""
 [ "$FORECAST" = "1" ] && FORECASTS=$(forecasts)
+UNUSED_LEAD=86400 # the unused-limit notice: the last day of a weekly window
+UNUSED_MIN=20     # and at least this many points that would go unused
 # Another model is a way out of a model-scoped limit only while the limit for
 # all models still has room.
 ALL_PCT=$(printf '%s\n' "$LIMITS" | awk -F'|' '$1 == "weekly_all" { print int($2); exit }')
@@ -930,8 +940,8 @@ while IFS='|' read -r kind percent resets scope; do
   [ -n "$kind" ] || continue
   pct=${percent%%.*}
   key="$kind"
-  IFS='|' read -r prev_resets prev_pct notified forecast <<< "$(echo "$NEW_STATE" | "$JQ" -r --arg k "$key" '
-    .[$k] // {} | [ (.resets_at // ""), (.percent // 0), (.notified // 0), (.forecast // 0) ]
+  IFS='|' read -r prev_resets prev_pct notified forecast unused <<< "$(echo "$NEW_STATE" | "$JQ" -r --arg k "$key" '
+    .[$k] // {} | [ (.resets_at // ""), (.percent // 0), (.notified // 0), (.forecast // 0), (.unused // 0) ]
     | map(tostring) | join("|")')"
   label=$(label_for "$kind" "$scope")
 
@@ -949,6 +959,7 @@ while IFS='|' read -r kind percent resets scope; do
       fi
       notified=0
       forecast=0
+      unused=0
     fi
   fi
 
@@ -974,8 +985,25 @@ while IFS='|' read -r kind percent resets scope; do
     fi
   fi
 
+  # unused: a subscription is paid for whether it is used or not. In the last
+  # UNUSED_LEAD seconds of a weekly window, if at the pace so far (the same
+  # projection status shows) at least UNUSED_MIN points would reset unused,
+  # say so once — early enough to still use them, and only once a week.
+  if [ "$UNUSED_ALERT" = "1" ] && [ "$unused" = "0" ]; then
+    reset_epoch=$(to_epoch "$resets")
+    if [ -n "$reset_epoch" ] && [ $(( reset_epoch - $(date +%s) )) -gt 0 ] && \
+       [ $(( reset_epoch - $(date +%s) )) -le "$UNUSED_LEAD" ]; then
+      projected=$(pace_projected "$kind" "$reset_epoch" "$pct")
+      if [ -n "$projected" ] && [ $(( 100 - projected )) -ge "$UNUSED_MIN" ]; then
+        MESSAGES+=("$(msg_unused "$label" "$pct" "$(fmt_when "$reset_epoch")" "$(( 100 - projected ))")")
+        unused=1
+      fi
+    fi
+  fi
+
   NEW_STATE=$(echo "$NEW_STATE" | "$JQ" --arg k "$key" --argjson p "$pct" --arg r "$resets" --argjson n "$notified" \
-    --argjson f "$forecast" '.[$k] = {percent: $p, resets_at: $r, notified: $n, forecast: $f}')
+    --argjson f "$forecast" --argjson u "$unused" \
+    '.[$k] = {percent: $p, resets_at: $r, notified: $n, forecast: $f, unused: $u}')
 done <<< "$LIMITS"
 
 # Paid usage credits: money is being spent once the plan's limits are used

@@ -78,6 +78,7 @@ OPT_WARN="$(plugin_option WARN warn)"
 OPT_CRIT="$(plugin_option CRIT crit)"
 OPT_FORECAST="$(plugin_option FORECAST forecast)"
 OPT_SPEND_ALERT="$(plugin_option SPEND_ALERT spend_alert)"
+OPT_UNUSED_ALERT="$(plugin_option UNUSED_ALERT unused_alert)"
 OPT_STATUSLINE_PACE="$(plugin_option STATUSLINE_PACE statusline_pace)"
 OPT_MODEL_HINT="$(plugin_option MODEL_HINT model_hint)"
 
@@ -125,6 +126,8 @@ write_wrapper() {
   [ "$OPT_FORECAST" = "false" ] && extra="${extra}export UM_FORECAST=0
 "
   [ "$OPT_SPEND_ALERT" = "false" ] && extra="${extra}export UM_SPEND_ALERT=0
+"
+  [ "$OPT_UNUSED_ALERT" = "false" ] && extra="${extra}export UM_UNUSED_ALERT=0
 "
   [ "$OPT_STATUSLINE_PACE" = "false" ] && extra="${extra}export UM_STATUSLINE_PACE=0
 "

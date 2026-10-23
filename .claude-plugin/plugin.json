@@ -58,6 +58,12 @@
       "description": "Notifies when paid usage credits start being spent, and at the warning and critical percent of the spending limit.",
       "default": true
     },
+    "unused_alert": {
+      "type": "boolean",
+      "title": "Unused weekly limit reminder",
+      "description": "Once a week, in the last day before a weekly limit resets, notifies when at the current pace a good part of it would go unused.",
+      "default": true
+    },
     "statusline_pace": {
       "type": "boolean",
       "title": "Weekly pace in the statusline",

@@ -144,6 +144,11 @@ On every check, for each limit:
 3. **Forecast** — if at the current pace the window runs out before it resets
    (see below) and it has not reached `UM_CRIT` yet → ⏳, once per window
    (`forecast` in the state; cleared with `notified` on a reset).
+4. **Unused limit** — in the last 24 hours of a weekly window, if at the pace
+   so far (the projection `status` shows, see below) 20 points or more would
+   reset unused → ⌛, once per window (`unused` in the state). A subscription
+   is paid for whether it is used or not; a day ahead there is still time to
+   use the rest.
 
 Multiple messages from one check are combined into a single notification.
 
@@ -326,6 +331,7 @@ switch in every installation, and it reaches every place the feature runs:
 |---|---|---|---|
 | ⏳ forecast | `UM_FORECAST=0` | `forecast` | `--no-forecast` |
 | 💳 credits | `UM_SPEND_ALERT=0` | `spend_alert` | `--no-spend-alert` |
+| ⌛ unused limit | `UM_UNUSED_ALERT=0` | `unused_alert` | `--no-unused-alert` |
 | `▲N` / `▼N` | `UM_STATUSLINE_PACE=0` | `statusline_pace` | `--no-statusline-pace` |
 | subagent guard (off) | `UM_GUARD_FANOUT=1` | `guard_fanout` | `--guard-fanout` |
 | model hint (off) | `UM_MODEL_HINT=1` | `model_hint` | `--model-hint` |
