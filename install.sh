@@ -32,6 +32,7 @@
 #   --no-forecast     no ⏳ notification when a limit would run out before it
 #                     resets
 #   --no-spend-alert  no 💳 notification about paid usage credits
+#   --no-unused-alert no ⌛ reminder that a weekly limit would reset unused
 #   --no-statusline-pace
 #                     no ▲N / ▼N weekly pace next to the statusline percent
 #   --guard-fanout    ask before a subagent starts once a weekly limit is at
@@ -58,6 +59,7 @@ WITH_STATUSLINE_MODEL=1
 WITH_SUBAGENT_MODEL=1
 WITH_FORECAST=1
 WITH_SPEND_ALERT=1
+WITH_UNUSED_ALERT=1
 WITH_STATUSLINE_PACE=1
 WITH_GUARD_FANOUT=0
 WITH_MODEL_HINT=0
@@ -75,6 +77,7 @@ while [ $# -gt 0 ]; do
     --no-subagent-model) WITH_SUBAGENT_MODEL=0 ;;
     --no-forecast) WITH_FORECAST=0 ;;
     --no-spend-alert) WITH_SPEND_ALERT=0 ;;
+    --no-unused-alert) WITH_UNUSED_ALERT=0 ;;
     --no-statusline-pace) WITH_STATUSLINE_PACE=0 ;;
     --guard-fanout) WITH_GUARD_FANOUT=1 ;;
     --model-hint) WITH_MODEL_HINT=1 ;;
@@ -174,6 +177,9 @@ fi
 if [ "$WITH_SPEND_ALERT" = "0" ]; then
   sed -i '' 's/\${UM_SPEND_ALERT:-1}/\${UM_SPEND_ALERT:-0}/' "$SCRIPTS_DIR/usage-monitor.sh"
 fi
+if [ "$WITH_UNUSED_ALERT" = "0" ]; then
+  sed -i '' 's/\${UM_UNUSED_ALERT:-1}/\${UM_UNUSED_ALERT:-0}/' "$SCRIPTS_DIR/usage-monitor.sh"
+fi
 if [ "$WITH_STATUSLINE_PACE" = "0" ]; then
   sed -i '' 's/\${UM_STATUSLINE_PACE:-1}/\${UM_STATUSLINE_PACE:-0}/' "$SCRIPTS_DIR/statusline-with-limits.sh"
 fi
@@ -244,6 +250,7 @@ STATUSLINE_MODEL=$WITH_STATUSLINE_MODEL
 SUBAGENT_MODEL=$WITH_SUBAGENT_MODEL
 FORECAST=$WITH_FORECAST
 SPEND_ALERT=$WITH_SPEND_ALERT
+UNUSED_ALERT=$WITH_UNUSED_ALERT
 STATUSLINE_PACE=$WITH_STATUSLINE_PACE
 GUARD_FANOUT=$WITH_GUARD_FANOUT
 MODEL_HINT=$WITH_MODEL_HINT

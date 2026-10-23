@@ -19,6 +19,7 @@ or finishes a task.
 ♻️ Session (5h) limit was reset (was 96%, now 3%)
 ⏳ Week (all models) limit: 46% — at this pace it runs out ~Thu 14:00, resets Sat 10:00
 💳 Paid usage credits are being spent: $4.20
+⌛ Week (all models) limit: 40%, resets Sat 10:00 — at this pace ~55% goes unused
 ```
 
 **The forecast** ⏳ answers "will it last until the reset?" before the 80%
@@ -29,6 +30,10 @@ week (nights and breaks included). The forecast stays silent while there is
 little data, below 25% of the week, and when the margin to the reset is thin —
 a false alarm is worse than none. **Paid credits** 💳: when the plan's limits
 are used up and money starts being spent, and at 80%/95% of the spending limit.
+**Unused limit** ⌛: a subscription is paid for even when it sits idle. In the
+last day before the week resets, if at the current pace 20 points or more
+would go unused, you get one reminder — while there is still time to use
+them.
 
 **Safeguards — off by default, on if you want them:**
 
@@ -203,6 +208,7 @@ Configure it under `/plugin` → limit-alerts → Configure:
 | `compact_advisor` | on | the `/compact` signal |
 | `forecast` | on | ⏳ forecast: a limit runs out before it resets |
 | `spend_alert` | on | 💳 notifications about paid usage credits |
+| `unused_alert` | on | ⌛ reminder: a weekly limit would reset unused |
 | `statusline_pace` | on | `▲N` / `▼N` — weekly pace in the statusline |
 | `guard_fanout` | off | ask before a subagent once the week is at 95% |
 | `model_hint` | off | suggest another model at a model-scoped limit |
@@ -251,6 +257,7 @@ Installer flags:
 | `--no-subagent-model` | statusline keeps the session model but drops the subagent model |
 | `--no-forecast` | no ⏳ forecast |
 | `--no-spend-alert` | no 💳 notifications about paid credits |
+| `--no-unused-alert` | no ⌛ reminder about an unused limit |
 | `--no-statusline-pace` | no `▲N` / `▼N` in the statusline |
 | `--guard-fanout` | ask before a subagent once the week is at 95% |
 | `--model-hint` | suggest another model at a model-scoped limit |
@@ -301,6 +308,7 @@ the defaults at the top of `usage-monitor.sh`):
 | `UM_STATUSLINE_RESET` | `1` | reset time next to a window that reached the warning threshold: `5h 84% ↻00:20`, the date `↻15.10` when it is over a day away |
 | `UM_FORECAST` | `1` | ⏳ notification when at the current pace a limit runs out before it resets |
 | `UM_SPEND_ALERT` | `1` | 💳 notification about paid usage credits |
+| `UM_UNUSED_ALERT` | `1` | ⌛ reminder in the week's last day when 20+ points would reset unused |
 | `UM_GUARD_FANOUT` | `0` | `1` — ask before a subagent once a weekly limit is at `UM_CRIT` |
 | `UM_MODEL_HINT` | `0` | `1` — suggest another model in the 🔴 for a model-scoped weekly limit |
 | `UM_STATUSLINE_PACE` | `1` | `▲N` / `▼N` next to a weekly window 5 or more points ahead of or behind an even pace |
