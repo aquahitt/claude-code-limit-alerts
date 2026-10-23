@@ -367,6 +367,16 @@ whenever the user edits the plugin configuration. Gating them on the version
 would leave the statusline and the background agent on stale language and
 thresholds until the next release.
 
+A session keeps the hooks of the plugin version it started with, so after an
+update an older session still runs its old bootstrap on resume, `/clear` and
+compaction. Before 0.9.3 that bootstrap copied its scripts over the newer
+mirror and rewrote the plist from its old template, and the next newer session
+copied them back — the background agent ran whichever version had spoken last.
+Now a bootstrap whose `VERSION` is older than `bin/.version` (compared with
+`sort -V`) leaves the mirror, the wrappers and the launchd agent alone and
+tells the user to restart that session. Removal still goes through: an option
+turned off is honoured whatever the version.
+
 The launchd plist is regenerated on every session start too, but the agent is
 reloaded only when the plist actually changed or the agent is not loaded.
 `SessionStart` also fires on resume, `/clear` and compaction; reloading each
