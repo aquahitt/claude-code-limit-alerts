@@ -251,7 +251,8 @@ note_once() {
   else
     updated=$("$jq_bin" -n --arg k "$key" '{($k): true}')
   fi
-  printf '%s\n' "$updated" > "$state"
+  # Through a temporary file, so a killed run never leaves it half-written.
+  printf '%s\n' "$updated" > "$state.$$.tmp" && mv -f "$state.$$.tmp" "$state" || rm -f "$state.$$.tmp"
 }
 
 backup_settings() {

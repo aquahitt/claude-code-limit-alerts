@@ -140,6 +140,16 @@ On every check, for each limit:
    produce false resets). A ♻️ notification is emitted only if the stored
    `percent` was ≥ `UM_RESET_MIN` (default 50) **and** the current percent is
    lower than the stored one. `notified` is cleared.
+   A window cannot end before its own reset time, so a `resets_at` that moves
+   while the stored one is still ahead is **not** a reset: the reading came
+   from another source (another account's token, a session still running an
+   older version of the script). No ♻️ then; `notified` is set to the level
+   the reading is already at, so it announces nothing now and a later
+   crossing still fires. The log gets a line saying so.
+
+   Окно не может закончиться раньше своего времени сброса: если `resets_at`
+   сдвинулся, пока сохранённый ещё впереди, это другой источник данных, а не
+   сброс — без ♻️ и без повторных 🟡/🔴.
 2. **Thresholds** — if `percent ≥ UM_CRIT` (95) and we haven't notified at that
    level in this window → 🔴. Else if `percent ≥ UM_WARN` (80) → 🟡.
    `notified` stores the highest announced threshold, so each fires at most
@@ -154,6 +164,14 @@ On every check, for each limit:
    use the rest.
 
 Multiple messages from one check are combined into a single notification.
+
+The state is written through a temporary file and a rename, and read
+defensively: a file that is not a JSON object (empty after a killed run, cut
+short by a full disk) starts over from `{}`, and a field of the wrong type
+falls back to its default. Before, such a file silenced every notification
+for good. / Состояние пишется через временный файл и переименование; файл,
+который не является JSON-объектом, начинается заново с `{}` — раньше такой
+файл навсегда выключал уведомления.
 
 A live request also runs under its own lock (`usage-monitor.fetch.lock`):
 the agent, the Stop hooks of several working terminals and the background
