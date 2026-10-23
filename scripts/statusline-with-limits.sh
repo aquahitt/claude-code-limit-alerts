@@ -43,6 +43,9 @@
 #   UM_STATUSLINE_RESET=1  0 hides the reset time shown next to a window that
 #                          has reached UM_WARN ("5ч 84% ↻00:20"; past a day
 #                          away, the date instead: "↻15.10")
+#   UM_STATUSLINE_PACE=1   0 hides how far a weekly window is ahead of an even
+#                          pace ("7д 46% ▲8": 8 points above the share of the
+#                          week that has elapsed; shown from 5 points up)
 #   UM_STATUSLINE_BG_REFRESH=1  0 stops the statusline from refreshing a stale
 #                          cache in the background (see the block near the end)
 #   UM_STATUSLINE_REFRESH_AFTER=120  cache age, seconds, that triggers it
@@ -63,6 +66,7 @@ SL_ADVISOR="${UM_STATUSLINE_ADVISOR:-1}"
 SL_SUBAGENT="${UM_SUBAGENT_MODEL:-1}"
 SUBAGENT_TTL="${UM_SUBAGENT_TTL:-180}"
 SL_RESET="${UM_STATUSLINE_RESET:-1}"
+SL_PACE="${UM_STATUSLINE_PACE:-1}"
 SL_BG_REFRESH="${UM_STATUSLINE_BG_REFRESH:-1}"
 SL_REFRESH_AFTER="${UM_STATUSLINE_REFRESH_AFTER:-120}"
 SETTINGS="$HOME/.claude/settings.json"
@@ -283,6 +287,22 @@ reset_suffix() { # $1 = percent, $2 = reset epoch (0 = unknown)
   fi
 }
 
+# A weekly window ahead of an even pace gets "▲N": N points above the share
+# of the week that has elapsed (usage-monitor.sh pace_expected, same rule).
+# Being ahead is the warning sign — 46% on Monday is not 46% on Friday — so
+# being on or behind pace adds nothing, and neither does the first half-day
+# of the window, when the comparison is noise.
+pace_suffix() { # $1 = percent, $2 = reset epoch of a weekly window
+  [ "$SL_PACE" = "1" ] || return 0
+  local len=604800 elapsed ahead
+  [ "${2:-0}" -gt 0 ] 2>/dev/null || return 0
+  elapsed=$(( $(date +%s) - ($2 - len) ))
+  [ "$elapsed" -ge $(( len / 14 )) ] && [ "$elapsed" -le "$len" ] || return 0
+  ahead=$(( $1 - elapsed * 100 / len ))
+  [ "$ahead" -ge 5 ] || return 0
+  printf ' %s▲%s%s' "$DIM" "$ahead" "$RST"
+}
+
 # Each window is taken from whichever source is fresher, decided per window:
 # stdin carries what Claude Code saw in this session's last API response —
 # current while the session works, frozen while it idles; the cache holds the
@@ -400,7 +420,7 @@ if [ -x "$JQ" ]; then
   read -r w r7 <<< "$(pick_window "$s7" "${sr7:-0}" "$cw" "${cr7:-0}")"
   seg5=""; seg7=""
   [ -n "$s" ] && seg5="${L5} $(colorize "$s")$(reset_suffix "$s" "${r5:-0}")"
-  [ -n "$w" ] && seg7="${L7} $(colorize "$w")$(reset_suffix "$w" "${r7:-0}")"
+  [ -n "$w" ] && seg7="${L7} $(colorize "$w")$(pace_suffix "$w" "${r7:-0}")$(reset_suffix "$w" "${r7:-0}")"
   for seg in "$seg5" "$seg7"; do
     [ -n "$seg" ] || continue
     [ -n "$LIMITS" ] && LIMITS="$LIMITS ${DIM}·${RST} "
@@ -409,7 +429,7 @@ if [ -x "$JQ" ]; then
   # model-scoped weekly limit (-1 = absent or expired, hidden). The WK
   # prefix keeps this from reading as "the model currently running".
   if [ -n "$LIMITS" ] && [ "$f" -ge 0 ] 2>/dev/null && [ -n "$SCOPED_MODEL" ]; then
-    LIMITS="$LIMITS ${DIM}·${RST} ${WK} ${SCOPED_MODEL} $(colorize "$f")$(reset_suffix "$f" "${rf:-0}")"
+    LIMITS="$LIMITS ${DIM}·${RST} ${WK} ${SCOPED_MODEL} $(colorize "$f")$(pace_suffix "$f" "${rf:-0}")$(reset_suffix "$f" "${rf:-0}")"
   fi
 fi
 

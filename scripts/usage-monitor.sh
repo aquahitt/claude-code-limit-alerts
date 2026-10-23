@@ -9,7 +9,10 @@
 #   hook   — called from Claude Code hooks (Stop / SessionStart); prints
 #            {"systemMessage": "..."} JSON only when there is news
 #   cron   — called from launchd every N minutes; sends macOS notifications
-#   status — human-readable snapshot of all limits
+#   status — human-readable snapshot of all limits, with the pace and the
+#            forecast, the weekly split by product and paid credits
+#   doctor — checks the installation without asking the endpoint; with
+#            --notify it also sends a test notification
 #   limits — machine-readable snapshot: one "kind|percent|resets_at|scope"
 #            line per limit, no header, no localization (pair with
 #            UM_CACHE_TTL=0 to bypass the cache)
@@ -18,9 +21,14 @@
 #   WARN  (default 80%)  🟡
 #   CRIT  (default 95%)  🔴
 #   reset ♻️  — when a window rolls over and usage was >= RESET_MIN (50%)
+#   forecast ⏳ — once per window, when at the current pace the limit runs
+#            out before the window resets (see forecasts)
+#   credits 💳 — when paid usage credits start being spent, and at WARN/CRIT
+#            percent of the spending limit
 #
 # Environment overrides:
 #   UM_WARN=80  UM_CRIT=95  UM_RESET_MIN=50  UM_CACHE_TTL=60  UM_LANG=ru|en
+#   UM_FORECAST=1  UM_SPEND_ALERT=1  (0 turns that notification off)
 
 set -u
 
@@ -36,6 +44,8 @@ CRIT="${UM_CRIT:-95}"
 RESET_MIN="${UM_RESET_MIN:-50}"
 CACHE_TTL="${UM_CACHE_TTL:-60}"
 LANG_UM="${UM_LANG:-ru}"
+FORECAST="${UM_FORECAST:-1}"
+SPEND_ALERT="${UM_SPEND_ALERT:-1}"
 
 # Plugin userConfig bridge. An explicit UM_* environment variable always wins;
 # the plugin option is only a fallback. Measured: a userConfig default is never
@@ -68,7 +78,11 @@ STATE="$DIR/usage-monitor-state.json"
 CACHE="$DIR/usage-monitor-cache.json"
 
 JQ="$(command -v jq || echo /opt/homebrew/bin/jq)"
-[ -x "$JQ" ] || exit 0
+if [ ! -x "$JQ" ]; then
+  # Hooks and the agent stay silent; a person running a command is told why.
+  case "$MODE" in status|doctor) echo "jq is required. Install it with: brew install jq" ;; esac
+  exit 0
+fi
 
 # Whose numbers these are. One machine can sign in to several accounts in
 # turn, and one person can be in several organizations (a personal plan and a
@@ -108,6 +122,44 @@ write_cache() { # $1 = response JSON
   fi
 }
 
+# History of readings, the ground the forecast stands on: one JSON line
+# whenever a percent or a window changes, and at least every
+# HISTORY_HEARTBEAT seconds while readings arrive, so a quiet stretch is
+# recorded as quiet rather than as a gap. Per account, like the state.
+#   {"t": epoch of the reading, "s": "api" | "claude",
+#    "w": {"<kind>": [percent, resets_at as epoch rounded to the minute]}}
+# resets_at is rounded because the API recomputes it on every request with
+# ±1s jitter; unrounded, every reading would look like a change.
+HISTORY="$DIR/usage-history${ACCOUNT_KEY:+.$ACCOUNT_KEY}.jsonl"
+HISTORY_HEARTBEAT=1800
+HISTORY_MAX_BYTES=$((2 * 1024 * 1024))
+HISTORY_KEEP_LINES=12000
+
+# ISO 8601 resets_at -> epoch seconds, inside jq.
+JQ_EPOCH='def epoch: (. // "") | sub("\\.[0-9]+"; "") | sub("(\\+00:00|Z)$"; "Z")
+  | (try fromdateiso8601 catch 0);'
+
+record_history() { # $1 = response JSON, $2 = epoch of the reading, $3 = source
+  local line last
+  line=$(printf '%s' "$1" | "$JQ" -c --argjson t "$2" --arg s "$3" "$JQ_EPOCH"'
+    { t: $t, s: $s,
+      w: ([ .limits[]? | select((.kind | type) == "string" and (.percent | type) == "number")
+            | { key: .kind,
+                value: [ .percent, (((.resets_at | epoch) + 30) / 60 | floor * 60) ] } ]
+          | from_entries) }
+    | select(.w != {})' 2>/dev/null) || return 0
+  [ -n "$line" ] || return 0
+  last=$(tail -n 1 "$HISTORY" 2>/dev/null)
+  if [ -n "$last" ] && "$JQ" -e -n --argjson a "$last" --argjson b "$line" --argjson hb "$HISTORY_HEARTBEAT" \
+       '$b.t <= $a.t or ($a.w == $b.w and $b.t - $a.t < $hb)' >/dev/null 2>&1; then
+    return 0
+  fi
+  printf '%s\n' "$line" >> "$HISTORY" 2>/dev/null || return 0
+  if [ "$(stat -f %z "$HISTORY" 2>/dev/null || echo 0)" -gt "$HISTORY_MAX_BYTES" ]; then
+    tail -n "$HISTORY_KEEP_LINES" "$HISTORY" > "$HISTORY.tmp" 2>/dev/null && mv "$HISTORY.tmp" "$HISTORY"
+  fi
+}
+
 LOG="$DIR/usage-monitor.log"
 LOG_MAX_BYTES=$((1024 * 1024)) # 1MB
 LOG_KEEP_LINES=2000
@@ -124,7 +176,7 @@ rotate_log_if_needed() {
 rotate_log_if_needed
 
 log_note() {
-  case "$MODE" in status|limits) return 0 ;; esac
+  case "$MODE" in status|limits|doctor) return 0 ;; esac
   echo "$(date '+%F %T') [$MODE] $1" >> "$LOG"
 }
 log_fetch_fail() { log_note "fetch failed: $1"; } # silent fetch failures used to leave no trace at all
@@ -302,6 +354,7 @@ fetch_usage() {
     if [ "$http_code" = "200" ] && echo "$resp" | "$JQ" -e '.limits' >/dev/null 2>&1; then
       backoff_clear
       write_cache "$resp"
+      record_history "$resp" "$fetch_started" api
       # Released only once the cache holds the answer the waiters will read.
       rmdir "$FETCH_LOCK" 2>/dev/null || true
       echo "$resp"
@@ -375,6 +428,7 @@ fetch_usage() {
     return 1
   fi
   write_cache "$resp"
+  record_history "$resp" "$(( fetched_ms / 1000 ))" claude
   echo "$resp"
 }
 
@@ -407,6 +461,18 @@ msg_crit() {
 msg_reset() { # $1 label, $2 old pct, $3 new pct
   if [ "$LANG_UM" = "en" ]; then echo "♻️ ${1} limit was reset (was ${2}%, now ${3}%)"
   else echo "♻️ Лимит «${1}» сброшен (было ${2}%, сейчас ${3}%)"; fi
+}
+msg_forecast() { # $1 label, $2 pct, $3 when it runs out, $4 when it resets
+  if [ "$LANG_UM" = "en" ]; then echo "⏳ ${1} limit: ${2}% — at this pace it runs out ~${3}, resets ${4}"
+  else echo "⏳ Лимит «${1}»: ${2}% — при таком темпе кончится ~${3}, сброс ${4}"; fi
+}
+msg_spend_start() { # $1 amount
+  if [ "$LANG_UM" = "en" ]; then echo "💳 Paid usage credits are being spent: ${1}"
+  else echo "💳 Расходуются платные usage credits: ${1}"; fi
+}
+msg_spend_level() { # $1 amount, $2 percent of the spending limit
+  if [ "$LANG_UM" = "en" ]; then echo "💳 Usage credits: ${1} — ${2}% of your spending limit"
+  else echo "💳 Usage credits: ${1} — ${2}% лимита расходов"; fi
 }
 notif_title() {
   if [ "$LANG_UM" = "en" ]; then echo "Claude Code — usage limits"
@@ -441,11 +507,103 @@ to_local() { # $1 = ISO8601 UTC timestamp, $2 = output format
   date -r "$epoch" "$2"
 }
 
+# When something happens, as a person reads it: "14:00" today, "Thu 14:00"
+# within the coming six days (a weekday is unambiguous there), the date
+# beyond. A weekly reset said as a bare "10:00" could be any of seven days.
+fmt_when() { # $1 = epoch
+  local d
+  local -a days
+  if [ "$(date -r "$1" +%F)" = "$(date +%F)" ]; then
+    date -r "$1" +%H:%M
+  elif [ $(( $1 - $(date +%s) )) -lt 518400 ]; then
+    if [ "$LANG_UM" = "en" ]; then days=(Mon Tue Wed Thu Fri Sat Sun); else days=(пн вт ср чт пт сб вс); fi
+    d=$(date -r "$1" +%u)
+    printf '%s %s\n' "${days[$(( d - 1 ))]}" "$(date -r "$1" +%H:%M)"
+  else
+    date -r "$1" "+%d.%m %H:%M"
+  fi
+}
+
+fmt_money() { # $1 amount in minor units, $2 exponent, $3 currency code
+  local v
+  v=$(awk -v m="$1" -v e="$2" 'BEGIN { printf("%." e "f", m / (10 ^ e)) }')
+  case "$3" in
+    USD) echo "\$$v" ;;
+    EUR) echo "€$v" ;;
+    GBP) echo "£$v" ;;
+    *)   echo "$v${3:+ $3}" ;;
+  esac
+}
+
+# Where a weekly window would be if the week were spent evenly: the percent
+# of it that has elapsed. "46% against 38% on pace" says more than "46%" — the
+# same number on Monday and on Friday are different situations. Weekly
+# windows only: five hours are too short for "evenly" to mean anything. Empty
+# for the first half-day of the window, when the comparison is all noise.
+pace_expected() { # $1 kind, $2 reset epoch -> percent, or nothing
+  local len=604800 elapsed
+  case "$1" in weekly_*) ;; *) return 0 ;; esac
+  [ "${2:-0}" -gt 0 ] 2>/dev/null || return 0
+  elapsed=$(( $(date +%s) - ($2 - len) ))
+  [ "$elapsed" -ge $(( len / 14 )) ] && [ "$elapsed" -le "$len" ] || return 0
+  echo $(( elapsed * 100 / len ))
+}
+
+# When each window runs out at the current pace, from the history: one
+# "kind|epoch" line per window that would run out before it resets. Silence
+# otherwise — a forecast that cannot be trusted is worse than none, so the
+# conditions are deliberately strict, and whole-percent readings that arrive
+# in bursts are handled by these conditions rather than by smoothing:
+#   session (5h): the rise over the last hour, measured across at least 15
+#     minutes and at least 5 points;
+#   weekly: the rise over the last 24 hours (a sample at least 20 hours old),
+#     which takes nights and breaks into account; without that much history,
+#     the average since the window opened, once it is a day old. Not below
+#     25%, where extrapolating a few points says nothing.
+# It has to run out at least 10 minutes (5h) or 3 hours (weekly) before the
+# reset: the margin keeps a forecast that hovers around the reset from
+# flapping.
+forecasts() {
+  [ -s "$HISTORY" ] || return 0
+  tail -n 3000 "$HISTORY" | "$JQ" -rs '
+    def wlen: if . == "session" then 18000 elif startswith("weekly") then 604800 else null end;
+    [ .[] | select((.t | type) == "number" and (.w | type) == "object") ] as $all
+    | ($all | last) as $cur
+    | select($cur != null)
+    | $cur.t as $tn
+    | $cur.w | to_entries[]
+    | .key as $k | .value[0] as $p | .value[1] as $r
+    | ($k | wlen) as $len
+    | select($len != null and $r > $tn and $p < 100)
+    | [ $all[] | select(.w[$k] != null and ((.w[$k][1] - $r) | fabs) <= 120)
+        | { t, p: .w[$k][0] } ] as $win
+    | ( if $len == 18000 then
+          ([ $win[] | select(.t >= $tn - 3600) ] | first) as $b
+          | if $b != null and ($tn - $b.t) >= 900 and ($p - $b.p) >= 5 then $b else null end
+        else
+          ([ $win[] | select(.t >= $tn - 86400) ] | first) as $b
+          | if $p < 25 then null
+            elif $b != null and ($tn - $b.t) >= 72000 then $b
+            elif ($tn - ($r - $len)) >= 86400 then { t: ($r - $len), p: 0 }
+            else null end
+        end ) as $base
+    | select($base != null)
+    | (($p - $base.p) / ($tn - $base.t)) as $rate
+    | select($rate > 0)
+    | ($tn + (100 - $p) / $rate | floor) as $eta
+    | select($eta < $r - (if $len == 18000 then 600 else 10800 end))
+    | "\($k)|\($eta)"' 2>/dev/null
+}
+
+forecast_for() { # $1 kind, $2 output of forecasts -> epoch, or nothing
+  printf '%s\n' "$2" | awk -F'|' -v k="$1" '$1 == k { print $2; exit }'
+}
+
 # `status` is read by a person, so it always says something: the version
 # first, then live numbers, or the last cached numbers marked with their age,
 # or a line saying there is no data. hook and cron must never act on stale
 # numbers, so for them a failed fetch still means silence.
-if [ "$MODE" = "status" ]; then
+if [ "$MODE" = "status" ] || [ "$MODE" = "doctor" ]; then
   # install.sh writes .limit-alerts-version into the state directory; in plugin
   # mode nobody does, and VERSION at the plugin root is the source of truth.
   # It is found relative to this file rather than through CLAUDE_PLUGIN_ROOT:
@@ -461,6 +619,145 @@ if [ "$MODE" = "status" ]; then
   if [ -n "$VERSION_FILE" ]; then
     printf 'claude-code-limit-alerts v%s\n' "$(cat "$VERSION_FILE")"
   fi
+fi
+
+# doctor: what is installed and what state it is in, for when something does
+# not show up. It reads files only — no request to the endpoint, so it is
+# safe to run during a 429 pause and says what the monitor last saw instead.
+if [ "$MODE" = "doctor" ]; then
+  tr_() { if [ "$LANG_UM" = "en" ]; then printf '%s' "$1"; else printf '%s' "$2"; fi; }
+  ok()   { echo "✓ $(tr_ "$1" "$2")"; }
+  bad()  { echo "⚠ $(tr_ "$1" "$2")"; }
+  info() { echo "· $(tr_ "$1" "$2")"; }
+  ago() { # seconds -> "5 min" / "3 h" / "2 d"
+    if   [ "$1" -lt 3600 ];   then tr_ "$(( $1 / 60 )) min" "$(( $1 / 60 )) мин"
+    elif [ "$1" -lt 172800 ]; then tr_ "$(( $1 / 3600 )) h" "$(( $1 / 3600 )) ч"
+    else                           tr_ "$(( $1 / 86400 )) d" "$(( $1 / 86400 )) д"; fi
+  }
+  NOW=$(date +%s)
+  SETTINGS="$HOME/.claude/settings.json"
+  case "$DIR" in
+    */plugins/data/*) INSTALL=plugin; LABEL="com.claude.usage-monitor.plugin" ;;
+    *)                INSTALL=classic; LABEL="com.claude.usage-monitor" ;;
+  esac
+  if [ "$INSTALL" = "plugin" ]; then
+    info "Installation: plugin, state in $DIR" "Установка: плагин, состояние в $DIR"
+  else
+    info "Installation: install.sh, state in $DIR" "Установка: install.sh, состояние в $DIR"
+  fi
+  ok "jq: $JQ" "jq: $JQ"
+
+  # Token: presence, plan and expiry only — never the token itself.
+  creds=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null)
+  IFS='|' read -r tok_has tok_exp tok_plan <<< "$(printf '%s' "$creds" | "$JQ" -r '
+    .claudeAiOauth // {} | [ ((.accessToken // "") != ""), ((.expiresAt // 0) / 1000 | floor),
+      (.subscriptionType // "?") ] | map(tostring) | join("|")' 2>/dev/null)"
+  if [ "${tok_has:-}" != "true" ]; then
+    bad "No Claude Code token in the Keychain — sign in to Claude Code (/login)." \
+        "В Keychain нет токена Claude Code — войдите в Claude Code (/login)."
+  elif [ "${tok_exp:-0}" -gt 0 ] && [ "$tok_exp" -le "$NOW" ]; then
+    bad "Keychain token (plan ${tok_plan}) expired $(ago $(( NOW - tok_exp ))) ago — Claude Code renews it when it runs." \
+        "Токен в Keychain (план ${tok_plan}) истёк $(ago $(( NOW - tok_exp ))) назад — Claude Code обновит его при запуске."
+  else
+    ok "Keychain token: present, plan ${tok_plan}" "Токен в Keychain: есть, план ${tok_plan}"
+  fi
+  if [ -n "$ACCOUNT_KEY" ]; then
+    ok "Account: $ACCOUNT_KEY" "Аккаунт: $ACCOUNT_KEY"
+  else
+    info "Account: unknown (no oauthAccount in ~/.claude.json) — state is shared by every sign-in." \
+         "Аккаунт: не определён (в ~/.claude.json нет oauthAccount) — состояние общее для всех входов."
+  fi
+
+  cache_mtime=$(stat -f %m "$CACHE" 2>/dev/null || echo 0)
+  if [ ! -f "$CACHE" ]; then
+    bad "No usage data has been fetched yet." "Данные о лимитах ещё ни разу не получены."
+  elif ! cache_is_mine; then
+    bad "The cache belongs to another account; the next check refreshes it." \
+        "Кэш принадлежит другому аккаунту; следующая проверка обновит его."
+  elif [ $(( NOW - cache_mtime )) -lt 900 ]; then
+    ok "Last data: $(ago $(( NOW - cache_mtime ))) ago" "Последние данные: $(ago $(( NOW - cache_mtime ))) назад"
+  else
+    bad "Last data: $(ago $(( NOW - cache_mtime ))) ago — checks have not succeeded since." \
+        "Последние данные: $(ago $(( NOW - cache_mtime ))) назад — с тех пор проверки не удавались."
+  fi
+  if backoff_active; then
+    bad "Live requests paused until $(date -r "$(backoff_until)" +%H:%M) after an error response (401/403/429)." \
+        "Запросы приостановлены до $(date -r "$(backoff_until)" +%H:%M) после ответа с ошибкой (401/403/429)."
+  fi
+  # The last failure, if nothing has succeeded since.
+  last_fail=$(grep 'fetch failed' "$LOG" 2>/dev/null | tail -n 1)
+  if [ -n "$last_fail" ]; then
+    fail_at=$(date -jf '%Y-%m-%d %H:%M:%S' "$(printf '%s' "$last_fail" | cut -c1-19)" +%s 2>/dev/null || echo 0)
+    if [ "$fail_at" -gt "$cache_mtime" ]; then
+      bad "Last failed check: ${last_fail#*fetch failed: } ($(date -r "$fail_at" '+%d.%m %H:%M'))" \
+          "Последняя неудачная проверка: ${last_fail#*fetch failed: } ($(date -r "$fail_at" '+%d.%m %H:%M'))"
+    fi
+  fi
+
+  if [ -s "$HISTORY" ]; then
+    hist_n=$(wc -l < "$HISTORY" | tr -d ' ')
+    hist_first=$(head -n 1 "$HISTORY" | "$JQ" -r '.t // 0' 2>/dev/null || echo 0)
+    ok "History: $hist_n readings over $(ago $(( NOW - hist_first )))" \
+       "История: $hist_n замеров за $(ago $(( NOW - hist_first )))"
+  else
+    info "History: none yet — forecasts start once readings accumulate." \
+         "История: пока пуста — прогноз появится, когда накопятся замеры."
+  fi
+
+  PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+  if [ -f "$PLIST" ]; then
+    interval=$(plutil -extract StartInterval raw "$PLIST" 2>/dev/null || echo "?")
+    if [ "${UM_NO_LAUNCHCTL:-0}" = "1" ] || launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then
+      ok "Background agent: on, every ${interval} s" "Фоновый агент: включён, каждые ${interval} с"
+    else
+      bad "Background agent: $PLIST exists but is not loaded." \
+          "Фоновый агент: $PLIST есть, но не загружен."
+    fi
+  else
+    info "Background agent: off — limits are checked on turns and by the statusline." \
+         "Фоновый агент: выключен — лимиты проверяются на ходах и statusline."
+  fi
+
+  sl_cmd=$("$JQ" -r '.statusLine.command // ""' "$SETTINGS" 2>/dev/null)
+  case "$INSTALL:$sl_cmd" in
+    classic:*statusline-with-limits*|plugin:*"$DIR/bin/statusline.sh"*)
+      ok "Statusline: on" "Statusline: включена" ;;
+    *) info "Statusline: off" "Statusline: выключена" ;;
+  esac
+
+  classic_hooks=$("$JQ" -r '[.hooks // {} | .[]? | .[]? | .hooks[]? | .command // ""
+    | select(contains("usage-monitor.sh"))] | length' "$SETTINGS" 2>/dev/null || echo 0)
+  plugin_on=$("$JQ" -r '[.enabledPlugins // {} | to_entries[]
+    | select((.key | startswith("limit-alerts@")) and .value == true)] | length' "$SETTINGS" 2>/dev/null || echo 0)
+  if [ "$INSTALL" = "classic" ] && [ "${classic_hooks:-0}" -eq 0 ]; then
+    bad "Hooks are not registered in ~/.claude/settings.json — re-run install.sh." \
+        "Хуки не зарегистрированы в ~/.claude/settings.json — запустите install.sh ещё раз."
+  fi
+  if [ "${classic_hooks:-0}" -gt 0 ] && [ "${plugin_on:-0}" -gt 0 ]; then
+    bad "Both the plugin and install.sh are active — every notification arrives twice. Run uninstall.sh to keep the plugin." \
+        "Активны и плагин, и install.sh — каждое уведомление приходит дважды. Запустите uninstall.sh, чтобы остался плагин."
+  fi
+
+  # A session keeps the plugin version it started with (see
+  # plugin-bootstrap.sh): the copies in bin/ may be newer than this script.
+  if [ "$INSTALL" = "plugin" ] && [ -n "${VERSION_FILE:-}" ] && [ -f "$DIR/bin/.version" ]; then
+    own_v=$(cat "$VERSION_FILE"); bin_v=$(cat "$DIR/bin/.version")
+    if [ "$own_v" != "$bin_v" ] && \
+       [ "$(printf '%s\n%s\n' "$own_v" "$bin_v" | sort -V | head -n 1)" = "$own_v" ]; then
+      bad "This session runs plugin $own_v, $bin_v is installed — restart the session." \
+          "Эта сессия работает на плагине $own_v, установлен $bin_v — перезапустите сессию."
+    fi
+  fi
+
+  if [ "${2:-}" = "--notify" ]; then
+    notify_mac "$(notif_title)" "$(tr_ "Test notification" "Тестовое уведомление")"
+    info "Test notification sent. No banner? Allow notifications for 'Script Editor' in System Settings → Notifications." \
+         "Тестовое уведомление отправлено. Баннера нет — разрешите уведомления для «Script Editor» в Настройках → Уведомления."
+  else
+    info "Banners can't be checked from here: 'doctor --notify' sends a test one." \
+         "Баннеры отсюда не проверить: 'doctor --notify' пришлёт тестовый."
+  fi
+  exit 0
 fi
 
 if ! USAGE=$(fetch_usage); then
@@ -506,24 +803,65 @@ if [ "$MODE" = "limits" ]; then
 fi
 
 if [ "$MODE" = "status" ]; then
+  # A forecast is made from live numbers only: the history's last reading is
+  # as old as the stale cache, and a pace from then is not the pace now.
+  FORECASTS=""
+  [ -z "${cache_at:-}" ] && FORECASTS=$(forecasts)
   while IFS='|' read -r kind percent resets scope; do
     [ -n "$kind" ] || continue
     reset_local=$(to_local "$resets" "+%d.%m %H:%M")
+    reset_epoch=$(to_epoch "$resets")
     # From a stale cache, a window whose reset time has already passed has
     # rolled over since: its percent no longer says anything, so say so.
     passed=""
-    if [ -n "${cache_at:-}" ] && [ -n "$resets" ]; then
-      reset_epoch=$(to_epoch "$resets")
-      if [ -n "$reset_epoch" ] && [ "$reset_epoch" -le "$(date +%s)" ]; then
-        if [ "$LANG_UM" = "en" ]; then passed=" (already reset)"; else passed=" (уже сброшен)"; fi
+    if [ -n "${cache_at:-}" ] && [ -n "$reset_epoch" ] && [ "$reset_epoch" -le "$(date +%s)" ]; then
+      if [ "$LANG_UM" = "en" ]; then passed=" (already reset)"; else passed=" (уже сброшен)"; fi
+    fi
+    extra=""
+    if [ -z "$passed" ]; then
+      expected=$(pace_expected "$kind" "$reset_epoch")
+      if [ -n "$expected" ]; then
+        if [ "$LANG_UM" = "en" ]; then extra="  · on pace: ${expected}%"; else extra="  · по графику ${expected}%"; fi
+      fi
+      eta=$(forecast_for "$kind" "$FORECASTS")
+      if [ -n "$eta" ]; then
+        if [ "$LANG_UM" = "en" ]; then extra="$extra  · runs out ~$(fmt_when "$eta")"
+        else extra="$extra  · кончится ~$(fmt_when "$eta")"; fi
       fi
     fi
     if [ "$LANG_UM" = "en" ]; then
-      printf "%-22s %3s%%  resets: %s%s\n" "$(label_for "$kind" "$scope")" "$percent" "$reset_local" "$passed"
+      printf "%-22s %3s%%  resets: %s%s%s\n" "$(label_for "$kind" "$scope")" "$percent" "$reset_local" "$passed" "$extra"
     else
-      printf "%-22s %3s%%  сброс: %s%s\n" "$(label_for "$kind" "$scope")" "$percent" "$reset_local" "$passed"
+      printf "%-22s %3s%%  сброс: %s%s%s\n" "$(label_for "$kind" "$scope")" "$percent" "$reset_local" "$passed" "$extra"
     fi
   done <<< "$LIMITS"
+
+  # The week split by product. These are shares of what was spent, summing
+  # to 100 — not shares of the limit — and the line says so.
+  BREAKDOWN=$(echo "$USAGE" | "$JQ" -r --arg lang "$LANG_UM" '
+    def name: if $lang == "en" then (.display_name // .key)
+      else ({claude_code: "Claude Code", chat: "чаты", cowork: "Cowork", other: "прочее"}[.key]
+            // .display_name // .key) end;
+    [ .seven_day_breakdown.rows[]? | select((.percent | type) == "number" and .percent > 0)
+      | "\(name) \(.percent | floor)%" ] | join(", ")' 2>/dev/null)
+  if [ -n "$BREAKDOWN" ]; then
+    if [ "$LANG_UM" = "en" ]; then echo "Weekly usage by product: $BREAKDOWN"
+    else echo "Расход недели по продуктам: $BREAKDOWN"; fi
+  fi
+
+  # Paid credits, only once any are spent: a "$0.00" line on every status
+  # would be noise for everyone who never goes past the plan.
+  IFS='|' read -r sp_minor sp_exp sp_cur sp_pct <<< "$(echo "$USAGE" | "$JQ" -r '
+    .spend // empty | select((.used.amount_minor | type) == "number" and .used.amount_minor > 0)
+    | [ .used.amount_minor, (.used.exponent // 2), (.used.currency // ""), ((.percent // 0) | floor) ]
+    | map(tostring) | join("|")' 2>/dev/null)"
+  if [ -n "${sp_minor:-}" ]; then
+    if [ "$LANG_UM" = "en" ]; then
+      echo "Paid usage credits: $(fmt_money "$sp_minor" "$sp_exp" "$sp_cur") (${sp_pct}% of the spending limit)"
+    else
+      echo "Платные usage credits: $(fmt_money "$sp_minor" "$sp_exp" "$sp_cur") (${sp_pct}% лимита расходов)"
+    fi
+  fi
   exit 0
 fi
 
@@ -552,14 +890,16 @@ trap 'rmdir "$LOCK" 2>/dev/null || true' EXIT
 [ -f "$STATE" ] || echo '{}' > "$STATE"
 MESSAGES=()
 NEW_STATE=$(cat "$STATE")
+FORECASTS=""
+[ "$FORECAST" = "1" ] && FORECASTS=$(forecasts)
 
 while IFS='|' read -r kind percent resets scope; do
   [ -n "$kind" ] || continue
   pct=${percent%%.*}
   key="$kind"
-  prev_resets=$(echo "$NEW_STATE" | "$JQ" -r --arg k "$key" '.[$k].resets_at // ""')
-  prev_pct=$(echo "$NEW_STATE" | "$JQ" -r --arg k "$key" '.[$k].percent // 0')
-  notified=$(echo "$NEW_STATE" | "$JQ" -r --arg k "$key" '.[$k].notified // 0')
+  IFS='|' read -r prev_resets prev_pct notified forecast <<< "$(echo "$NEW_STATE" | "$JQ" -r --arg k "$key" '
+    .[$k] // {} | [ (.resets_at // ""), (.percent // 0), (.notified // 0), (.forecast // 0) ]
+    | map(tostring) | join("|")')"
   label=$(label_for "$kind" "$scope")
 
   # window rollover: resets_at moved by more than 2 min. The API recomputes
@@ -575,6 +915,7 @@ while IFS='|' read -r kind percent resets scope; do
         MESSAGES+=("$(msg_reset "$label" "${prev_pct%%.*}" "$pct")")
       fi
       notified=0
+      forecast=0
     fi
   fi
 
@@ -587,9 +928,45 @@ while IFS='|' read -r kind percent resets scope; do
     notified=$WARN
   fi
 
+  # forecast: once per window, and not once the window is at CRIT — "almost
+  # exhausted" has already said it.
+  if [ "$FORECAST" = "1" ] && [ "$forecast" = "0" ] && [ "$notified" -lt "$CRIT" ]; then
+    eta=$(forecast_for "$kind" "$FORECASTS")
+    if [ -n "$eta" ]; then
+      MESSAGES+=("$(msg_forecast "$label" "$pct" "$(fmt_when "$eta")" "$(fmt_when "$(to_epoch "$resets")")")")
+      forecast=1
+    fi
+  fi
+
   NEW_STATE=$(echo "$NEW_STATE" | "$JQ" --arg k "$key" --argjson p "$pct" --arg r "$resets" --argjson n "$notified" \
-    '.[$k] = {percent: $p, resets_at: $r, notified: $n}')
+    --argjson f "$forecast" '.[$k] = {percent: $p, resets_at: $r, notified: $n, forecast: $f}')
 done <<< "$LIMITS"
+
+# Paid usage credits: money is being spent once the plan's limits are used
+# up. Said when spending starts, then at WARN and CRIT percent of the spending
+# limit. The amount only grows within a billing period, so a smaller one
+# means a new period and re-arms all three.
+if [ "$SPEND_ALERT" = "1" ]; then
+  IFS='|' read -r sp_minor sp_exp sp_cur sp_pct <<< "$(echo "$USAGE" | "$JQ" -r '
+    .spend // empty | select((.used.amount_minor | type) == "number")
+    | [ .used.amount_minor, (.used.exponent // 2), (.used.currency // ""), ((.percent // 0) | floor) ]
+    | map(tostring) | join("|")' 2>/dev/null)"
+  if [ -n "${sp_minor:-}" ]; then
+    IFS='|' read -r sp_prev sp_notified <<< "$(echo "$NEW_STATE" | "$JQ" -r '
+      ._spend // {} | [ (.amount_minor // 0), (.notified // 0) ] | map(tostring) | join("|")')"
+    [ "$sp_minor" -lt "$sp_prev" ] && sp_notified=0
+    sp_amount=$(fmt_money "$sp_minor" "$sp_exp" "$sp_cur")
+    if [ "$sp_pct" -ge "$CRIT" ] && [ "$sp_notified" -lt "$CRIT" ]; then
+      MESSAGES+=("$(msg_spend_level "$sp_amount" "$sp_pct")"); sp_notified=$CRIT
+    elif [ "$sp_pct" -ge "$WARN" ] && [ "$sp_notified" -lt "$WARN" ]; then
+      MESSAGES+=("$(msg_spend_level "$sp_amount" "$sp_pct")"); sp_notified=$WARN
+    elif [ "$sp_minor" -gt 0 ] && [ "$sp_notified" -lt 1 ]; then
+      MESSAGES+=("$(msg_spend_start "$sp_amount")"); sp_notified=1
+    fi
+    NEW_STATE=$(echo "$NEW_STATE" | "$JQ" --argjson a "$sp_minor" --argjson n "$sp_notified" \
+      '._spend = {amount_minor: $a, notified: $n}')
+  fi
+fi
 
 echo "$NEW_STATE" > "$STATE"
 

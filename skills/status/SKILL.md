@@ -11,6 +11,6 @@ Run:
 UM_STATE_DIR="${CLAUDE_PLUGIN_DATA}" bash "${CLAUDE_PLUGIN_ROOT}/scripts/usage-monitor.sh" status
 ```
 
-Report the output as-is. Each line is one limit: its name, the percent used, and when that window resets.
+Report the output as-is. Each line is one limit: its name, the percent used, and when that window resets. A weekly line may add "по графику N%" / "on pace: N%" — where the window would be if the week were spent evenly, so a percent above it means spending faster than the week allows. "кончится ~…" / "runs out ~…" is the forecast: at the current pace the limit runs out at that time, before the window resets. Below the limits there may be the week's split by product (shares of what was spent, not of the limit) and the paid usage credits spent so far.
 
 The first line is the installed version. If a line starting with `⚠` follows, live data could not be fetched and the numbers come from the last cache — pass on its age, and treat a window marked "уже сброшен" / "already reset" as rolled over, its percent no longer current. If the output says there is no usage data, say so rather than guessing at numbers. Put `UM_CACHE_TTL=0` in front of the command when the user wants a reading that bypasses the cache.

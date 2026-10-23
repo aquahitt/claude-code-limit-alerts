@@ -17,13 +17,28 @@ or finishes a task.
 🟡 Session (5h) limit: 82%, resets at 18:00
 🔴 Week (all models) limit: 96% — almost exhausted, resets at 10:00
 ♻️ Session (5h) limit was reset (was 96%, now 3%)
+⏳ Week (all models) limit: 46% — at this pace it runs out ~Thu 14:00, resets Sat 10:00
+💳 Paid usage credits are being spent: $4.20
 ```
+
+**The forecast** ⏳ answers "will it last until the reset?" before the 80%
+threshold fires: when the limit would run out before its window resets at the
+current pace, you get one notification per window. The pace comes from the
+history of readings: the last hour for the 5-hour window, the last day for the
+week (nights and breaks included). The forecast stays silent while there is
+little data, below 25% of the week, and when the margin to the reset is thin —
+a false alarm is worse than none. **Paid credits** 💳: when the plan's limits
+are used up and money starts being spent, and at 80%/95% of the spending limit.
 
 **Statusline with all limit percentages** (green / yellow ≥ 80% / red ≥ 95%):
 
 ```
-[your statusline] | 5h 71% · 7d 7% · wk Fable 4%
+[your statusline] | 5h 71% · 7d 46% ▲8 · wk Fable 4%
 ```
+
+`▲8` means the week is 8 points ahead of an even pace: 38% of the week has
+elapsed, 46% is spent. Shown from 5 points up, when you spend faster than the
+week allows.
 
 **"Needs your attention" notifications** — when Claude waits for a permission
 or a reply, or finishes a task, you get a banner with sound. The title carries
@@ -45,10 +60,17 @@ not allowed in Notification Center.
 ```
 $ ~/.claude/scripts/usage-monitor.sh status
 claude-code-limit-alerts vX.Y.Z
-Session (5h)          71%  resets: 16.07 18:00
-Week (all models)      7%  resets: 17.07 10:00
-Week (Fable)           4%  resets: 17.07 10:00
+Session (5h)          71%  resets: 16.07 18:00  · runs out ~17:10
+Week (all models)     46%  resets: 17.07 10:00  · on pace: 38%
+Week (Fable)           4%  resets: 17.07 10:00  · on pace: 38%
+Weekly usage by product: Claude Code 88%, Chats 12%
 ```
+
+"On pace" is where the week would be if spent evenly. "Runs out" is the
+forecast, when the limit would run out before the reset at the current pace.
+The product line gives shares of what the week has spent (Claude Code, chats,
+Cowork), not shares of the limit. If paid credits were spent, their amount
+follows.
 
 If live data can't be fetched (for example, the endpoint answers 429),
 `status` shows the last cache marked "⚠ No live data — showing the cache from
@@ -251,6 +273,9 @@ the defaults at the top of `usage-monitor.sh`):
 | `UM_SUBAGENT_TTL` | `180` | how recently a subagent must have written for it to count as running, seconds |
 | `UM_STATUSLINE_ADVISOR` | `1` | show the advisor model (`/advisor`) |
 | `UM_STATUSLINE_RESET` | `1` | reset time next to a window that reached the warning threshold: `5h 84% ↻00:20`, the date `↻15.10` when it is over a day away |
+| `UM_FORECAST` | `1` | ⏳ notification when at the current pace a limit runs out before it resets |
+| `UM_SPEND_ALERT` | `1` | 💳 notification about paid usage credits |
+| `UM_STATUSLINE_PACE` | `1` | `▲N` next to a weekly window 5 or more points ahead of an even pace |
 | `UM_STATUSLINE_BG_REFRESH` | `1` | the statusline refreshes a stale cache in the background (what keeps usage from other devices visible without the background agent) |
 | `UM_STATUSLINE_REFRESH_AFTER` | `120` | cache age, seconds, after which the statusline starts a refresh |
 
@@ -260,6 +285,29 @@ The background check interval is `StartInterval` (seconds, 92 by default) in
 asking every 92 seconds.
 
 ## Troubleshooting
+
+Start with `doctor`. It checks the installation from files, without asking
+the endpoint (safe even during a 429 pause): the Keychain token, the account,
+the age of the data, the pause, the last error, the history, the background
+agent, the statusline, the hooks, a double installation and a stale plugin
+session.
+
+```
+$ ~/.claude/scripts/usage-monitor.sh doctor
+claude-code-limit-alerts vX.Y.Z
+· Installation: install.sh, state in /Users/you/.claude/scripts
+✓ jq: /opt/homebrew/bin/jq
+✓ Keychain token: present, plan max
+✓ Account: 1a2b3c4d-5e6f7a8b
+✓ Last data: 1 min ago
+✓ History: 1240 readings over 6 d
+✓ Background agent: on, every 92 s
+✓ Statusline: on
+· Banners can't be checked from here: 'doctor --notify' sends a test one.
+```
+
+`doctor --notify` sends a test notification. In the plugin, the
+`limit-alerts:doctor` skill does the same.
 
 Every notification sent and every failed attempt to fetch data (an expired
 token, a 403 for team/org accounts, a stale local cache, etc.) is logged
@@ -308,7 +356,7 @@ answers through the model. It also works mid-turn.
 ```
 Claude Code limits
 ⚠ Session (5h): 87% — resets 15:19 (in 2 h 50 min)
-⚠ Week (all models): 90% — resets 15.10 19:59 (in 5 d 7 h)
+⚠ Week (all models): 90% — resets 15.10 19:59 (in 5 d 7 h) · on pace: 24%
 Week (Fable): 4%
 Source: this session's last API response. The model-scoped weekly limit comes from the monitor's cache (5 min ago).
 ```
@@ -317,8 +365,9 @@ Each window takes the fresher number — from this session's last API response
 or from `usage-monitor-cache.json` (from `UM_STATE_DIR`, `~/.claude/scripts`,
 or the `limit-alerts` plugin's data directory), as in the statusline; the
 summary says where each window came from. The model-scoped weekly limit always
-comes from the cache. If the monitor is
-backing off after an HTTP 429, the summary says so.
+comes from the cache. Weekly windows get "on pace", as in `status`; the
+weekly split by product and paid credits also come from the cache. If the
+monitor is backing off after an HTTP 429, the summary says so.
 
 To run it:
 
