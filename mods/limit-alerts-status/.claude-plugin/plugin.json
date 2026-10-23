@@ -1,6 +1,6 @@
 {
   "name": "limit-alerts-status",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Experimental: a /limits command that prints every usage window, its reset time and the data source instantly, with no model turn.",
   "author": {
     "name": "Alexey Romanovsky",

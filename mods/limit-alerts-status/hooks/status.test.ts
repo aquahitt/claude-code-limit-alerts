@@ -1,7 +1,7 @@
 import { describe, expect, mock, test } from 'claude-code/testing'
 import type { CommandRunInput, On, SessionRateLimit } from 'claude-code'
 
-import { freshest, fromCache, parseOffset, renderReport } from './format'
+import { formatMoney, freshest, fromCache, paceExpected, parseOffset, renderReport } from './format'
 
 const T = { warn: 80, crit: 95 }
 // 2026-10-10 12:00:00 UTC
@@ -18,7 +18,7 @@ describe('report', () => {
     expect(text).toBe([
       'Лимиты Claude Code',
       '⚠ Сессия (5ч): 84% — сброс 15:58 (через 58 мин)',
-      '⛔ Неделя (все модели): 96% — сброс 15.10 22:00 (через 5 д 7 ч)',
+      '⛔ Неделя (все модели): 96% — сброс 15.10 22:00 (через 5 д 7 ч) · по графику 24%',
       'Источник: последний ответ API этой сессии.',
     ].join('\n'))
   })
@@ -58,6 +58,28 @@ describe('report', () => {
     expect(text).toContain('Источник: Сессия (5ч) — кэш монитора (1 мин назад), Неделя (все модели) — ответ API этой сессии.')
   })
 
+  test('weekly pace, the split by product and paid credits', () => {
+    const text = renderReport({
+      seven: { percent: 46, resetsAt: NOW_S + 5 * 86400, from: 'cache' },
+      breakdown: [{ key: 'claude_code', name: 'Claude Code', percent: 88 }, { key: 'chat', name: 'Chats', percent: 12 }],
+      spend: { amountMinor: 420, exponent: 2, currency: 'USD', percent: 42 },
+      cacheAgeMs: 60_000,
+    }, 'ru', T, NOW, MSK)
+    expect(text).toContain('Неделя (все модели): 46% — сброс 15.10 15:00 (через 5 д) · по графику 28%')
+    expect(text).toContain('Расход недели по продуктам: Claude Code 88%, чаты 12%')
+    expect(text).toContain('💳 Платные usage credits: $4.20 (42% лимита расходов)')
+    const en = renderReport({ breakdown: [{ key: 'chat', name: 'Chats', percent: 12 }] }, 'en', T, NOW, 0)
+    expect(en).toContain('Weekly usage by product: Chats 12%')
+  })
+
+  test('pace needs half a day of the window; money keeps its currency', () => {
+    expect(paceExpected(NOW_S + 7 * 86400 - 3600, NOW_S)).toBeUndefined()
+    expect(paceExpected(NOW_S + 86400, NOW_S)).toBe(85)
+    expect(paceExpected(undefined, NOW_S)).toBeUndefined()
+    expect(formatMoney({ amountMinor: 1999, exponent: 2, currency: 'EUR', percent: 0 })).toBe('€19.99')
+    expect(formatMoney({ amountMinor: 500, exponent: 0, currency: 'JPY', percent: 0 })).toBe('500 JPY')
+  })
+
   test('picks the fresher reading of a window', () => {
     const r = NOW_S + 3600
     // same window: usage only grows, so the higher percent is the later one
@@ -81,6 +103,16 @@ describe('report', () => {
     })
     expect(r.five).toEqual({ percent: 61.5, resetsAt: NOW_S + 3600 })
     expect(r.scoped?.model).toBe('Fable')
+    expect(r.breakdown).toBeUndefined()
+    expect(r.spend).toBeUndefined()
+    const extra = fromCache({
+      spend: { percent: 0, used: { amount_minor: 0, currency: 'USD', exponent: 2 } },
+      seven_day_breakdown: { rows: [{ key: 'claude_code', display_name: 'Claude Code', percent: 100 },
+        { key: 'chat', display_name: 'Chats', percent: 0 }] },
+    })
+    // nothing spent is not a credits line; a product at 0% is not listed
+    expect(extra.spend).toBeUndefined()
+    expect(extra.breakdown).toEqual([{ key: 'claude_code', name: 'Claude Code', percent: 100 }])
   })
 })
 
