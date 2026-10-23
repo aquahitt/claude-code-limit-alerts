@@ -29,6 +29,8 @@
 # Environment overrides:
 #   UM_WARN=80  UM_CRIT=95  UM_RESET_MIN=50  UM_CACHE_TTL=60  UM_LANG=ru|en
 #   UM_FORECAST=1  UM_SPEND_ALERT=1  (0 turns that notification off)
+#   UM_MODEL_HINT=0  (1 adds "carry on with another model" to a model-scoped
+#                     weekly limit at CRIT)
 
 set -u
 
@@ -46,6 +48,7 @@ CACHE_TTL="${UM_CACHE_TTL:-60}"
 LANG_UM="${UM_LANG:-ru}"
 FORECAST="${UM_FORECAST:-1}"
 SPEND_ALERT="${UM_SPEND_ALERT:-1}"
+MODEL_HINT="${UM_MODEL_HINT:-0}"
 
 # Plugin userConfig bridge. An explicit UM_* environment variable always wins;
 # the plugin option is only a fallback. Measured: a userConfig default is never
@@ -67,6 +70,7 @@ if [ "$FROM_PLUGIN" = "1" ]; then
   # Booleans arrive as the literal strings true / false.
   [ "${CLAUDE_PLUGIN_OPTION_FORECAST:-}" = "false" ] && FORECAST="${UM_FORECAST:-0}"
   [ "${CLAUDE_PLUGIN_OPTION_SPEND_ALERT:-}" = "false" ] && SPEND_ALERT="${UM_SPEND_ALERT:-0}"
+  [ "${CLAUDE_PLUGIN_OPTION_MODEL_HINT:-}" = "true" ] && MODEL_HINT="${UM_MODEL_HINT:-1}"
 fi
 
 # Resolution order: an explicit override, then the directory install.sh
@@ -476,6 +480,10 @@ msg_spend_start() { # $1 amount
 msg_spend_level() { # $1 amount, $2 percent of the spending limit
   if [ "$LANG_UM" = "en" ]; then echo "💳 Usage credits: ${1} — ${2}% of your spending limit"
   else echo "💳 Usage credits: ${1} — ${2}% лимита расходов"; fi
+}
+msg_model_hint() {
+  if [ "$LANG_UM" = "en" ]; then echo "↪ You can carry on with another model (/model): it does not spend this limit"
+  else echo "↪ Можно продолжить на другой модели (/model): этот лимит она не тратит"; fi
 }
 notif_title() {
   if [ "$LANG_UM" = "en" ]; then echo "Claude Code — usage limits"
@@ -914,6 +922,9 @@ MESSAGES=()
 NEW_STATE=$(cat "$STATE")
 FORECASTS=""
 [ "$FORECAST" = "1" ] && FORECASTS=$(forecasts)
+# Another model is a way out of a model-scoped limit only while the limit for
+# all models still has room.
+ALL_PCT=$(printf '%s\n' "$LIMITS" | awk -F'|' '$1 == "weekly_all" { print int($2); exit }')
 
 while IFS='|' read -r kind percent resets scope; do
   [ -n "$kind" ] || continue
@@ -944,6 +955,9 @@ while IFS='|' read -r kind percent resets scope; do
   # thresholds: one notification per threshold per window
   if [ "$pct" -ge "$CRIT" ] && [ "$notified" -lt "$CRIT" ]; then
     MESSAGES+=("$(msg_crit "$label" "$pct" "$(fmt_when "$(to_epoch "$resets")")")")
+    if [ "$MODEL_HINT" = "1" ] && [ "$kind" = "weekly_scoped" ] && [ "${ALL_PCT:-0}" -lt "$CRIT" ]; then
+      MESSAGES+=("$(msg_model_hint)")
+    fi
     notified=$CRIT
   elif [ "$pct" -ge "$WARN" ] && [ "$notified" -lt "$WARN" ]; then
     MESSAGES+=("$(msg_warn "$label" "$pct" "$(fmt_when "$(to_epoch "$resets")")")")

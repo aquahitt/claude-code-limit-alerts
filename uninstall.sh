@@ -17,10 +17,10 @@ if [ -n "$JQ" ] && [ -f "$SETTINGS" ]; then
   cp "$SETTINGS" "$SETTINGS.bak.limit-alerts-uninstall"
   updated=$("$JQ" '
     .hooks //= {} |
-    (.hooks.Stop, .hooks.SessionStart, .hooks.Notification) |=
+    (.hooks.Stop, .hooks.SessionStart, .hooks.Notification, .hooks.PreToolUse) |=
       (if . then map(.hooks |= map(select(.command // ""
                | (contains("usage-monitor.sh") or contains("notify-attention.sh")
-                  or contains("compact-advisor.sh")) | not)))
+                  or contains("compact-advisor.sh") or contains("fanout-guard.sh")) | not)))
              | map(select(.hooks | length > 0))
        else . end) |
     .hooks |= with_entries(select(.value != null and .value != []))
@@ -59,6 +59,7 @@ rm -f "$SCRIPTS_DIR/usage-monitor.sh" \
       "$SCRIPTS_DIR/notify-attention.sh" \
       "$SCRIPTS_DIR/auto-resume.sh" \
       "$SCRIPTS_DIR/compact-advisor.sh" \
+      "$SCRIPTS_DIR/fanout-guard.sh" \
       "$SCRIPTS_DIR/statusline-base.cmd" \
       "$SCRIPTS_DIR/usage-monitor-state.json" \
       "$SCRIPTS_DIR/usage-monitor-cache.json" \
