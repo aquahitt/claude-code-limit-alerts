@@ -40,10 +40,12 @@ project lives in shell scripts installed into `~/.claude/`.
   one, resumes one conversation twice. This project warns about limits; it
   does not manage sessions.
 - `launchd/com.claude.usage-monitor.plist.template` — plist template.
-  `__LABEL__`, `__SCRIPT__`, `__ERRLOG__` (and legacy `__HOME__`) are
-  substituted by `generate_plist`, whose 5th-7th parameters are optional and
-  default to the classic install's values — that is what lets `install.sh` and
-  `update.sh` keep calling it with four arguments.
+  `__LABEL__`, `__SCRIPT__`, `__ERRLOG__`, `__INTERVAL__` (and legacy
+  `__HOME__`) are substituted by `generate_plist`, whose 5th-8th parameters
+  are optional — empty means the classic install's label, script and error
+  log, and a 92-second interval. The interval is always passed explicitly
+  (`--interval` / the `interval` option), never carried over from an older
+  plist: that cannot tell a user's choice from an old version's default.
 - `docs/how-it-works.md` — data source (`/api/oauth/usage` endpoint,
   Keychain), hook logic, and anti-spam rules.
 - `docs/superpowers/plans/`, `docs/superpowers/specs/` — plans and specs left

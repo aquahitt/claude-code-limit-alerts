@@ -81,6 +81,17 @@ OPT_SPEND_ALERT="$(plugin_option SPEND_ALERT spend_alert)"
 OPT_UNUSED_ALERT="$(plugin_option UNUSED_ALERT unused_alert)"
 OPT_STATUSLINE_PACE="$(plugin_option STATUSLINE_PACE statusline_pace)"
 OPT_MODEL_HINT="$(plugin_option MODEL_HINT model_hint)"
+OPT_STATUSLINE_MODEL="$(plugin_option STATUSLINE_MODEL statusline_model)"
+OPT_SUBAGENT_MODEL="$(plugin_option SUBAGENT_MODEL subagent_model)"
+OPT_COMPACT_WARN="$(plugin_option COMPACT_WARN compact_warn)"
+OPT_INTERVAL="$(plugin_option INTERVAL interval)"
+# A number from a hand-editable settings.json: anything but 60..3600 whole
+# seconds falls back to the default rather than into the plist.
+case "$OPT_INTERVAL" in ''|*[!0-9]*) OPT_INTERVAL="" ;; esac
+if [ -n "$OPT_INTERVAL" ] && { [ "$OPT_INTERVAL" -lt 60 ] || [ "$OPT_INTERVAL" -gt 3600 ]; }; then
+  OPT_INTERVAL=""
+fi
+case "$OPT_COMPACT_WARN" in ''|*[!0-9]*) OPT_COMPACT_WARN="" ;; esac
 
 # A session keeps the hooks of the plugin version it started with, and
 # SessionStart fires again on /clear, compaction and resume. A session that
@@ -133,6 +144,12 @@ write_wrapper() {
 "
   # The model hint is the other way round: off by default, passed when on.
   [ "$OPT_MODEL_HINT" = "true" ] && extra="${extra}export UM_MODEL_HINT=1
+"
+  [ "$OPT_STATUSLINE_MODEL" = "false" ] && extra="${extra}export UM_STATUSLINE_MODEL=0
+"
+  [ "$OPT_SUBAGENT_MODEL" = "false" ] && extra="${extra}export UM_SUBAGENT_MODEL=0
+"
+  [ -n "$OPT_COMPACT_WARN" ] && extra="${extra}export UM_COMPACT_WARN=\"$OPT_COMPACT_WARN\"
 "
   cat > "$path" <<EOF
 #!/usr/bin/env bash
@@ -353,7 +370,7 @@ apply_launchd() {
   [ -f "$PLUGIN_PLIST" ] && existing="$PLUGIN_PLIST"
   generate_plist "$ROOT/launchd/com.claude.usage-monitor.plist.template" \
     "$candidate" "" "$existing" \
-    "$PLUGIN_LABEL" "$BIN/cron.sh" "/tmp/claude-usage-monitor-plugin.err" \
+    "$PLUGIN_LABEL" "$BIN/cron.sh" "/tmp/claude-usage-monitor-plugin.err" "$OPT_INTERVAL" \
     || { rm -f "$candidate"; return 1; }
   if [ -n "$existing" ] && cmp -s "$candidate" "$PLUGIN_PLIST"; then
     changed=0

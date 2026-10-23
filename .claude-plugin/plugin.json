@@ -46,6 +46,14 @@
       "description": "Suggests running /compact at a logical breakpoint when the context window fills up.",
       "default": true
     },
+    "compact_warn": {
+      "type": "number",
+      "title": "/compact advisor threshold",
+      "description": "Percent of the context window at which the /compact advisor speaks up; also where ctx turns yellow in the statusline.",
+      "min": 1,
+      "max": 99,
+      "default": 70
+    },
     "forecast": {
       "type": "boolean",
       "title": "Run-out forecast",
@@ -82,6 +90,18 @@
       "description": "Adds \"carry on with another model (/model)\" to the critical warning of a model-scoped weekly limit. Off by default.",
       "default": false
     },
+    "statusline_model": {
+      "type": "boolean",
+      "title": "Model segment in the statusline",
+      "description": "Session model, effort, context fill and running subagents next to the limits.",
+      "default": true
+    },
+    "subagent_model": {
+      "type": "boolean",
+      "title": "Subagent model in the statusline",
+      "description": "The model of a running subagent when it differs from the session's.",
+      "default": true
+    },
     "statusline": {
       "type": "boolean",
       "title": "Limits in the statusline",
@@ -91,8 +111,16 @@
     "launchd": {
       "type": "boolean",
       "title": "Background agent (launchd)",
-      "description": "Checks limits every 5 minutes so window-reset notifications arrive while Claude Code is closed. Off by default because it registers a system agent.",
+      "description": "Checks limits in the background (every 92 seconds by default, see interval) so notifications arrive while Claude Code is closed. Off by default because it registers a system agent.",
       "default": false
+    },
+    "interval": {
+      "type": "number",
+      "title": "Background check interval",
+      "description": "Seconds between background checks of the launchd agent. Lower means faster notifications and more requests to the usage endpoint.",
+      "min": 60,
+      "max": 3600,
+      "default": 92
     }
   }
 }

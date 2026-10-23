@@ -111,7 +111,10 @@ don't happen to have it in their environment.
   `~/.claude/scripts/statusline-base.cmd` exists, its content is executed as the
   base statusline and the limits are appended after a `|` separator.
 - **launchd agent** (`com.claude.usage-monitor`) — runs `usage-monitor.sh cron`
-  every 92 seconds. This is what makes reset notifications work while Claude Code
+  every 92 seconds by default (`interval` in the plugin, `--interval` for
+  `install.sh`; a hand edit of `StartInterval` does not survive — the plugin
+  regenerates the plist on every session start, `update.sh` on an update).
+  This is what makes reset notifications work while Claude Code
   is closed, and what keeps the cache (the statusline's model-scoped weekly
   limit and its fallback) fresh between turns.
 - **`notify-attention.sh`** — independent of the limit monitor. Hooked to
@@ -335,6 +338,10 @@ switch in every installation, and it reaches every place the feature runs:
 | `▲N` / `▼N` | `UM_STATUSLINE_PACE=0` | `statusline_pace` | `--no-statusline-pace` |
 | subagent guard (off) | `UM_GUARD_FANOUT=1` | `guard_fanout` | `--guard-fanout` |
 | model hint (off) | `UM_MODEL_HINT=1` | `model_hint` | `--model-hint` |
+
+The same holds for every other feature since 0.11.0 — thresholds, the
+`/compact` threshold, the statusline segments and the agent interval included;
+README's "Configuration" lists where each is set in each installation.
 
 An environment variable reaches hooks and the statusline but not the launchd
 agent, which starts without the user's environment. So the plugin passes a
