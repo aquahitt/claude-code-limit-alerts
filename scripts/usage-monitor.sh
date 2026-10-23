@@ -711,10 +711,20 @@ if [ "$MODE" = "doctor" ]; then
     bad "Live requests paused until $(date -r "$(backoff_until)" +%H:%M) after an error response (401/403/429)." \
         "Запросы приостановлены до $(date -r "$(backoff_until)" +%H:%M) после ответа с ошибкой (401/403/429)."
   fi
-  # The last failure, if nothing has succeeded since.
-  last_fail=$(grep 'fetch failed' "$LOG" 2>/dev/null | tail -n 1)
+  # The last failure, if nothing has succeeded since — by its cause. A failed
+  # check logs the cause first (an HTTP code, no token) and then why the
+  # local fallback did not help either; during a pause only the fallback line
+  # repeats, along with the agent's "paused until" notes. Those say nothing
+  # about why, and the pause has its own line above, so they are skipped
+  # unless the cause is older than the last success.
+  log_time() { date -jf '%Y-%m-%d %H:%M:%S' "$(printf '%s' "$1" | cut -c1-19)" +%s 2>/dev/null || echo 0; }
+  last_fail=$(grep 'fetch failed' "$LOG" 2>/dev/null \
+    | grep -v -e 'fetch failed: fallback ' -e 'fetch failed: rate limited, live requests paused' | tail -n 1)
+  if [ -z "$last_fail" ] || [ "$(log_time "$last_fail")" -le "$cache_mtime" ]; then
+    last_fail=$(grep 'fetch failed' "$LOG" 2>/dev/null | tail -n 1)
+  fi
   if [ -n "$last_fail" ]; then
-    fail_at=$(date -jf '%Y-%m-%d %H:%M:%S' "$(printf '%s' "$last_fail" | cut -c1-19)" +%s 2>/dev/null || echo 0)
+    fail_at=$(log_time "$last_fail")
     if [ "$fail_at" -gt "$cache_mtime" ]; then
       bad "Last failed check: ${last_fail#*fetch failed: } ($(date -r "$fail_at" '+%d.%m %H:%M'))" \
           "Последняя неудачная проверка: ${last_fail#*fetch failed: } ($(date -r "$fail_at" '+%d.%m %H:%M'))"
@@ -724,8 +734,14 @@ if [ "$MODE" = "doctor" ]; then
   if [ -s "$HISTORY" ]; then
     hist_n=$(wc -l < "$HISTORY" | tr -d ' ')
     hist_first=$(head -n 1 "$HISTORY" | "$JQ" -r '.t // 0' 2>/dev/null || echo 0)
-    ok "History: $hist_n readings over $(ago $(( NOW - hist_first )))" \
-       "История: $hist_n замеров за $(ago $(( NOW - hist_first )))"
+    # 1 замер, 2 замера, 5 замеров (11–14 always take the last form).
+    case "$(( hist_n % 100 ))" in
+      11|12|13|14) hist_ru="замеров" ;;
+      *) case "$(( hist_n % 10 ))" in 1) hist_ru="замер" ;; 2|3|4) hist_ru="замера" ;; *) hist_ru="замеров" ;; esac ;;
+    esac
+    if [ "$hist_n" -eq 1 ]; then hist_en="reading"; else hist_en="readings"; fi
+    ok "History: $hist_n $hist_en over $(ago $(( NOW - hist_first )))" \
+       "История: $hist_n $hist_ru за $(ago $(( NOW - hist_first )))"
   else
     info "History: none yet — forecasts start once readings accumulate." \
          "История: пока пуста — прогноз появится, когда накопятся замеры."
