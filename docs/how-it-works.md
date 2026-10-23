@@ -213,7 +213,9 @@ Whatever the failure, the CLI refresh runs at most once per 5 minutes
 keychain would otherwise start a headless Claude Code on every agent tick. The pause lives in
 `usage-monitor-backoff.json` in the state directory and is cleared by the next
 successful fetch. During it no live request and no `claude -p /usage` refresh
-is made; hook and cron stay silent, and `status` shows the last cache with
+is made, and an idle statusline starts its background refresh only when
+Claude Code's own `cachedUsageUtilization` is newer than the cache (otherwise
+the refresh could only log "fallback unavailable" every 30 seconds); hook and cron stay silent, and `status` shows the last cache with
 the time of the next attempt.
 
 `claude -p /usage` is a full headless session that fires this project's own
