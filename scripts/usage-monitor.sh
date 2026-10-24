@@ -522,6 +522,16 @@ label_for() { # $1 kind, $2 scope model name
   fi
 }
 
+# printf's %-Ns pads by bytes in bash 3.2 (macOS /bin/bash): a Cyrillic label
+# is two bytes a letter, so it got no padding and the status columns drifted.
+# This pads by characters; wc -m counts them under a UTF-8 locale whatever the
+# caller's environment is.
+pad_right() { # $1 text, $2 width
+  local n
+  n=$(printf '%s' "$1" | LC_ALL=en_US.UTF-8 wc -m | tr -d ' ')
+  printf '%s%*s' "$1" $(( $2 > n ? $2 - n : 0 )) ''
+}
+
 msg_warn() { # $1 label, $2 pct, $3 reset time
   if [ "$LANG_UM" = "en" ]; then echo "🟡 ${1} limit: ${2}%, resets at ${3}"
   else echo "🟡 Лимит «${1}»: ${2}%, сброс в ${3}"; fi
@@ -963,7 +973,7 @@ if [ "$MODE" = "status" ]; then
         else extra="$extra  · кончится ~$(fmt_when "$eta")"; fi
       fi
     fi
-    printf "%-22s %3s%%  %s%s%s\n" "$(label_for "$kind" "$scope")" "$percent" "$reset_part" "$passed" "$extra"
+    printf "%s %3s%%  %s%s%s\n" "$(pad_right "$(label_for "$kind" "$scope")" 22)" "$percent" "$reset_part" "$passed" "$extra"
   done <<< "$LIMITS"
 
   # The week split by product. These are shares of what was spent, summing
