@@ -104,12 +104,12 @@ don't happen to have it in their environment.
   all terminals show one number within a redraw.
   A window at or above `UM_WARN` gets its reset time, dim, after the percent
   (`↻HH:MM` within a day, `↻DD.MM` beyond); below the threshold the line stays
-  short. `UM_STATUSLINE_RESET=0` turns it off.
-  Для каждого окна statusline берёт более свежую цифру из stdin (ответ API этой
-  сессии, застывает при простое) и кэша (данные всего аккаунта), а устаревший
-  кэш обновляет в фоне. У окна, дошедшего до порога, показывается время сброса. If
+  short. `UM_STATUSLINE_RESET=0` turns it off. If
   `~/.claude/scripts/statusline-base.cmd` exists, its content is executed as the
   base statusline and the limits are appended after a `|` separator.
+  Для каждого окна statusline берёт более свежую цифру из stdin (ответ API этой
+  сессии, застывает при простое) и кэша (данные всего аккаунта), а устаревший
+  кэш обновляет в фоне. У окна, дошедшего до порога, показывается время сброса.
 - **launchd agent** (`com.claude.usage-monitor`) — runs `usage-monitor.sh cron`
   every 92 seconds by default (`interval` in the plugin, `--interval` for
   `install.sh`; a hand edit of `StartInterval` does not survive — the plugin
@@ -123,10 +123,24 @@ don't happen to have it in their environment.
   (session name from `~/.claude/sessions/*.json`, project dir, git branch, last
   user prompt from the transcript) and shows a macOS banner + plays a sound via
   `afplay` (sound works even without Notification Center permission).
+- **`compact-advisor.sh`** — a `Stop` hook, also independent of the limit
+  monitor: the `/compact` signal (see [Compact advisor](#compact-advisor--подсказка-о-compact)).
+- **`fanout-guard.sh`** — a `PreToolUse` hook (matcher `Agent|Task`), off by
+  default: asks before a subagent once a weekly limit is at `UM_CRIT` (see
+  [Safeguards](#safeguards--страховки)). Reads only the monitor's cache.
+- **`plugin-bootstrap.sh`** — plugin mode only, a `SessionStart` hook that
+  mirrors scripts and applies the statusline/launchd options (see
+  [Plugin mode](#plugin-mode--режим-плагина)).
+
+Также: `compact-advisor.sh` — подсказка о `/compact` (`Stop`),
+`fanout-guard.sh` — вопрос перед субагентом (`PreToolUse`, выключен по
+умолчанию), `plugin-bootstrap.sh` — `SessionStart` плагина.
 
 ## State machine / Логика уведомлений
 
-State is kept per limit kind in `~/.claude/scripts/usage-monitor-state.json`:
+State is kept per limit kind, in one file per account —
+`~/.claude/scripts/usage-monitor-state.<key>.json` (see
+[Several accounts](#several-accounts--несколько-аккаунтов)):
 
 ```json
 {"session": {"percent": 82, "resets_at": "...", "notified": 80}}
@@ -509,7 +523,8 @@ so a subagent that only lives for a few seconds may never make it onto the
 line at all.
 
 Turn it off with `install.sh --no-statusline-model` (whole segment) or
-`--no-subagent-model` (keep the session model, drop `⇢ …`).
+`--no-subagent-model` (keep the session model, drop `⇢ …`); in the plugin,
+the `statusline_model` / `subagent_model` options.
 
 ## Plugin mode / Режим плагина
 
@@ -525,7 +540,7 @@ The same scripts ship two ways: `install.sh` copies them into
 
 | Context | Gets `CLAUDE_PLUGIN_*` | Needs a stable path |
 |---|---|---|
-| Hooks (`Stop`, `SessionStart`, `Notification`) | yes | no |
+| Hooks (`Stop`, `SessionStart`, `Notification`, `PreToolUse`) | yes | no |
 | Statusline command | no | **yes** |
 | launchd job | no | **yes** |
 
@@ -637,8 +652,8 @@ plugin's data directory. `hooks.json` and both wrappers always pass
 | `.stale-session` | version of an older session whose hooks skipped their checks (for `doctor`) |
 | `bin/usage-monitor.sh`, `bin/statusline-with-limits.sh` | mirrored copies |
 | `bin/cron.sh`, `bin/statusline.sh` | generated env wrappers |
-| `usage-monitor-cache.json`, `usage-monitor-state.json` | as in the classic install |
-| `compact-advisor-state.json`, `statusline-base.cmd` | as in the classic install |
+| `usage-monitor-cache.json`, `usage-monitor-state.<key>.json`, `usage-monitor-backoff.<key>.json`, `usage-history.<key>.jsonl` | as in the classic install |
+| `usage-monitor.log`, `usage-monitor-observed`, `compact-advisor-state.json`, `statusline-base.cmd` | as in the classic install |
 | `.bootstrap-state.json` | one-shot flags (double-install warning, classic-surface notes) |
 
 ### Options / Настройки
@@ -690,6 +705,9 @@ anti-spam state, duplicating every notification.
 | `~/.claude/scripts/statusline-with-limits.sh` | statusline wrapper |
 | `~/.claude/scripts/notify-attention.sh` | attention notifications (banner + sound) |
 | `~/.claude/scripts/compact-advisor.sh` | Stop hook: `/compact` signal |
+| `~/.claude/scripts/fanout-guard.sh` | PreToolUse hook: ask before a subagent (only with `--guard-fanout`) |
+| `~/.claude/scripts/usage-monitor.log` | every notification sent and every failed fetch, with its reason |
+| `~/.claude/scripts/usage-history.<key>.jsonl` | readings history for the forecast, one per account |
 | `~/.claude/scripts/statusline-base.cmd` | preserved previous statusline command (optional) |
 | `~/.claude/scripts/usage-monitor-cache.json` | cached API response |
 | `~/.claude/scripts/usage-monitor-state.<key>.json` | notification state, one per account (`usage-monitor-state.json` before 0.9.1) |
@@ -698,6 +716,7 @@ anti-spam state, duplicating every notification.
 | `~/.claude/scripts/usage-monitor-sl-refresh` | stamp: last background refresh started by the statusline |
 | `~/.claude/scripts/usage-monitor-observed` | freshest stdin reading seen by any session, shared by all statuslines |
 | `~/.claude/scripts/usage-monitor.lock` | state-update lock (exists only while a check runs) |
+| `~/.claude/scripts/usage-monitor.fetch.lock` | live-request lock: concurrent callers share one request |
 | `~/.claude/scripts/compact-advisor-state.json` | compact-signal anti-spam state |
 | `~/.claude/scripts/.limit-alerts-options` | options chosen at install time |
 | `~/Library/LaunchAgents/com.claude.usage-monitor.plist` | background agent |
@@ -718,8 +737,14 @@ preserved):
 ```json
 {
   "hooks": {
-    "Stop":        [{"hooks": [{"type": "command", "command": "bash \"$HOME/.claude/scripts/usage-monitor.sh\" hook", "timeout": 20}]}],
-    "SessionStart": [{"hooks": [{"type": "command", "command": "bash \"$HOME/.claude/scripts/usage-monitor.sh\" hook", "timeout": 20}]}]
+    "Stop": [{"hooks": [
+      {"type": "command", "command": "bash \"$HOME/.claude/scripts/usage-monitor.sh\" hook", "timeout": 20},
+      {"type": "command", "command": "bash \"$HOME/.claude/scripts/notify-attention.sh\" stop", "async": true},
+      {"type": "command", "command": "bash \"$HOME/.claude/scripts/compact-advisor.sh\"", "timeout": 10}
+    ]}],
+    "SessionStart": [{"hooks": [{"type": "command", "command": "bash \"$HOME/.claude/scripts/usage-monitor.sh\" hook", "timeout": 20}]}],
+    "Notification": [{"hooks": [{"type": "command", "command": "bash \"$HOME/.claude/scripts/notify-attention.sh\" notification", "async": true}]}],
+    "PreToolUse": [{"matcher": "Agent|Task", "hooks": [{"type": "command", "command": "bash \"$HOME/.claude/scripts/fanout-guard.sh\"", "timeout": 10}]}]
   },
   "statusLine": {
     "type": "command",
@@ -728,6 +753,10 @@ preserved):
   }
 }
 ```
+
+Each `--no-…` flag leaves its hook out (`--no-attention`, `--no-compact-advisor`),
+and `PreToolUse` is added only with `--guard-fanout`. / Флаги `--no-…`
+убирают свой хук, `PreToolUse` добавляется только с `--guard-fanout`.
 
 In `hook` mode the script prints `{"systemMessage": "..."}` only when there is
 something to announce; Claude Code displays it in the UI. Silence otherwise.
