@@ -2,11 +2,45 @@
 
 **Русский** | [English](README.en.md)
 
-Уведомления для Claude Code: мониторинг лимитов подписки (приближение к исчерпанию,
-сброс окна, проценты в statusline) и «требуется внимание» — баннер со звуком, когда
-Claude ждёт разрешения, ответа или закончил задачу.
+[![Release](https://img.shields.io/github/v/release/aquahitt/claude-code-limit-alerts?label=release)](https://github.com/aquahitt/claude-code-limit-alerts/releases)
+[![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-d97757)](#плагином-рекомендуется)
+[![macOS](https://img.shields.io/badge/platform-macOS-lightgrey?logo=apple)](#roadmap)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
+**Узнайте о лимите Claude Code раньше, чем он остановит работу.** Проценты
+5-часового и недельного лимитов прямо в statusline, предупреждение до того, как
+окно кончится, и баннер со звуком, когда Claude ждёт вас.
+
+<p align="center">
+  <img src="docs/media/hero-ru.png" alt="Терминал Claude Code: statusline с процентами лимитов, предупреждение 🟡 и прогноз ⏳ в интерфейсе, баннер macOS «Claude Code — лимиты»" width="100%">
+</p>
+
+- **Точные цифры, а не оценка.** Те же проценты, что показывает `/usage`, — из
+  того же endpoint, а не подсчёт токенов по локальным логам. Учитывается и работа
+  в других терминалах, на других устройствах и в claude.ai.
+- **Заранее, а не постфактум.** 🟡 на 80%, 🔴 на 95%, прогноз ⏳ «при таком темпе
+  кончится в пн 18:00» и ♻️ при сбросе окна — даже когда Claude Code закрыт.
+- **Не надо караулить терминал.** Claude ждёт разрешения или закончил задачу —
+  приходит баннер с именем сессии и веткой.
+- **Ничего лишнего.** Чистый bash + `jq`, без ключей и логинов: OAuth-токен
+  Claude Code читается из Keychain и уходит только на `api.anthropic.com`.
+
+**Установка за минуту** — две команды в Claude Code:
+
+```
+/plugin marketplace add aquahitt/claude-code-limit-alerts
+/plugin install limit-alerts@claude-code-limit-alerts
+```
+
+Затем `/plugin` → limit-alerts → Configure: включите `statusline` и `launchd`
+(по умолчанию выключены, потому что пишут за пределы плагина) и выберите `lang`.
+Подробнее — в [Установке](#установка).
 
 > 🍎 **Пока только macOS.** Поддержка Windows и Linux запланирована — см. [Roadmap](#roadmap).
+
+<p align="center">
+  <img src="docs/media/demo-ru.gif" alt="Анимация: процент 5-часового лимита в statusline растёт до 82% и желтеет, приходит баннер о лимите, затем баннер «Задача завершена»" width="100%">
+</p>
 
 ## Что вы получаете
 
@@ -181,7 +215,8 @@ myproject (main) | Opus 5/high · adv Fable · ctx 72% · ⇢ Haiku 4.5 | 5ч 66
 ## Установка
 
 Требования: macOS, [jq](https://jqlang.github.io/jq/) (`brew install jq`),
-Claude Code с авторизацией по подписке (Pro/Max).
+Claude Code со входом через подписку claude.ai — Pro, Max, Team или Enterprise
+(не API-ключ, см. [FAQ](#faq)).
 
 Два способа. Плагин — основной; `install.sh` остаётся для тех, кому нужен
 `--auto-compact-window` или установка без маркетплейса.
@@ -256,6 +291,7 @@ cd claude-code-limit-alerts
 | `--lang en` | уведомления на английском (по умолчанию — русский) |
 | `--warn N` / `--crit N` | пороги 🟡 и 🔴, % (по умолчанию 80 и 95) |
 | `--interval N` | интервал проверки фонового агента, сек, 60–3600 (по умолчанию 92) |
+| `--proxy <url>` | прокси для фонового агента; по умолчанию берётся из `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` текущего шелла, `--proxy ""` отключает |
 | `--compact-warn N` | порог подсказки о `/compact`, % контекста (по умолчанию 70) |
 | `--no-compact-advisor` | без подсказки о `/compact` |
 | `--auto-compact-window <токены>` | сдвинуть встроенный порог авто-сжатия Claude Code (100000–1000000); влияет на все сессии |
@@ -290,8 +326,8 @@ git pull
 launchd-агент при изменении конфигурации и дозаявляет хуки — без
 переустановки того, что вы не ставили (`--no-statusline`/`--no-launchd`/
 `--no-attention` по-прежнему уважаются). Флаг `--dry-run` показывает, что
-будет сделано, ничего не меняя. Список изменений между версиями — в
-[CHANGELOG.md](CHANGELOG.md).
+будет сделано, ничего не меняя; `--proxy` — как у `install.sh`. Список
+изменений между версиями — в [CHANGELOG.md](CHANGELOG.md).
 
 ## Настройка
 

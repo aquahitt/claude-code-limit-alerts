@@ -2,12 +2,47 @@
 
 [Русский](README.md) | **English**
 
-Notifications for Claude Code: subscription usage-limit monitoring (approaching
-exhaustion, window resets, live percentages in your statusline) and "needs your
-attention" — a banner with sound when Claude waits for a permission, a reply,
-or finishes a task.
+[![Release](https://img.shields.io/github/v/release/aquahitt/claude-code-limit-alerts?label=release)](https://github.com/aquahitt/claude-code-limit-alerts/releases)
+[![Claude Code plugin](https://img.shields.io/badge/Claude%20Code-plugin-d97757)](#as-a-plugin-recommended)
+[![macOS](https://img.shields.io/badge/platform-macOS-lightgrey?logo=apple)](#roadmap)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
+**Know about a Claude Code limit before it stops your work.** The 5-hour and
+weekly limits right in your statusline, a warning before a window runs out,
+and a banner with sound when Claude is waiting for you.
+
+<p align="center">
+  <img src="docs/media/hero-en.png" alt="Claude Code terminal: a statusline with limit percentages, a 🟡 warning and a ⏳ forecast in the UI, and a macOS banner &quot;Claude Code — usage limits&quot;" width="100%">
+</p>
+
+- **Exact numbers, not an estimate.** The same percentages `/usage` shows —
+  from the same endpoint, not a token count over local logs. Work in other
+  terminals, on other devices and on claude.ai counts too.
+- **Ahead of time, not after the fact.** 🟡 at 80%, 🔴 at 95%, a ⏳ forecast
+  ("at this pace it runs out ~Mon 18:00") and ♻️ when a window resets — even
+  while Claude Code is closed.
+- **No need to babysit the terminal.** When Claude waits for a permission or
+  finishes a task, you get a banner with the session name and git branch.
+- **Nothing extra.** Plain bash + `jq`, no API keys or logins: Claude Code's
+  OAuth token is read from the Keychain and goes to `api.anthropic.com` only.
+
+**Install in a minute** — two commands in Claude Code:
+
+```
+/plugin marketplace add aquahitt/claude-code-limit-alerts
+/plugin install limit-alerts@claude-code-limit-alerts
+```
+
+Then `/plugin` → limit-alerts → Configure: set `lang` to `en` (notifications
+default to Russian) and turn on `statusline` and `launchd` (off by default
+because they write outside the plugin). More under
+[Installation](#installation).
 
 > 🍎 **macOS only for now.** Windows and Linux support is planned — see [Roadmap](#roadmap).
+
+<p align="center">
+  <img src="docs/media/demo-en.gif" alt="Animation: the 5-hour percentage in the statusline climbs to 82% and turns yellow, a limit banner arrives, then a &quot;Task finished&quot; banner" width="100%">
+</p>
 
 ## What you get
 
@@ -182,7 +217,8 @@ Turn any of it off: `./install.sh --no-compact-advisor`, `./install.sh --no-stat
 ## Installation
 
 Requirements: macOS, [jq](https://jqlang.github.io/jq/) (`brew install jq`),
-Claude Code authenticated with a subscription (Pro/Max).
+Claude Code signed in with a claude.ai subscription — Pro, Max, Team or
+Enterprise (not an API key, see the [FAQ](#faq)).
 
 Two ways. The plugin is the primary one; `install.sh` stays for anyone who
 needs `--auto-compact-window` or an install without a marketplace.
@@ -257,6 +293,7 @@ Installer flags:
 | `--lang en` | English notifications (default is Russian) |
 | `--warn N` / `--crit N` | 🟡 and 🔴 thresholds, % (80 and 95 by default) |
 | `--interval N` | background agent check interval, seconds, 60–3600 (92 by default) |
+| `--proxy <url>` | proxy for the background agent; by default taken from `HTTP_PROXY`/`HTTPS_PROXY`/`ALL_PROXY`/`NO_PROXY` in the current shell, `--proxy ""` turns it off |
 | `--compact-warn N` | `/compact` signal threshold, % of context (70 by default) |
 | `--no-compact-advisor` | skip the `/compact` signal |
 | `--auto-compact-window <tokens>` | move Claude Code's own auto-compact threshold (100000–1000000); affects every session |
@@ -290,7 +327,8 @@ against `VERSION` in the repo, re-copies changed scripts, reloads the
 launchd agent if its config changed, and re-checks hook registration —
 without installing anything you opted out of (`--no-statusline`/
 `--no-launchd`/`--no-attention` are still respected). `--dry-run` shows what
-would change without changing anything. See [CHANGELOG.md](CHANGELOG.md)
+would change without changing anything; `--proxy` works as in `install.sh`.
+See [CHANGELOG.md](CHANGELOG.md)
 for what changed between versions.
 
 ## Configuration
