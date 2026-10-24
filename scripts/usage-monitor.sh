@@ -85,6 +85,37 @@ fi
 # silently relocate its state into that plugin's data directory.
 DIR="${UM_STATE_DIR:-$HOME/.claude/scripts}"
 mkdir -p "$DIR" 2>/dev/null || true
+
+# This copy's own version: VERSION at the plugin (or repository) root, the
+# .version the plugin bootstrap writes beside its bin/ mirror, or the marker
+# install.sh leaves beside the classic copy. Empty when none is found.
+OWN_VERSION=""
+HERE=$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)
+if [ -f "$HERE/../VERSION" ] && [ -f "$HERE/../.claude-plugin/plugin.json" ]; then
+  OWN_VERSION=$(cat "$HERE/../VERSION" 2>/dev/null)
+elif [ -f "$HERE/.version" ]; then
+  OWN_VERSION=$(cat "$HERE/.version" 2>/dev/null)
+elif [ -f "$HERE/.limit-alerts-version" ]; then
+  OWN_VERSION=$(cat "$HERE/.limit-alerts-version" 2>/dev/null)
+fi
+
+# A session keeps running the hooks of the plugin version it started with,
+# until it is closed. Such an older copy rewrote the shared state in its older
+# shape (dropping the forecast and unused flags, so the newer copy announced
+# them again), paused on its older backoff rules and sent its older messages.
+# The plugin bootstrap stamps the newest installed version into bin/.version;
+# an older copy than that leaves the checks to the newer one — the background
+# agent and the sessions started since — and only leaves a mark for doctor.
+INSTALLED_VERSION=$(cat "$DIR/bin/.version" 2>/dev/null)
+case "$MODE" in hook|cron)
+  if [[ "$OWN_VERSION" =~ ^[0-9] ]] && [[ "$INSTALLED_VERSION" =~ ^[0-9] ]] && \
+     [ "$OWN_VERSION" != "$INSTALLED_VERSION" ] && \
+     [ "$(printf '%s\n%s\n' "$OWN_VERSION" "$INSTALLED_VERSION" | sort -V | head -n 1)" = "$OWN_VERSION" ]; then
+    printf '%s\n' "$OWN_VERSION" > "$DIR/.stale-session" 2>/dev/null || true
+    exit 0
+  fi ;;
+esac
+
 STATE="$DIR/usage-monitor-state.json"
 CACHE="$DIR/usage-monitor-cache.json"
 
@@ -186,21 +217,32 @@ rotate_log_if_needed() {
 }
 rotate_log_if_needed
 
+# Each line carries the version that wrote it, so doctor can tell when a
+# session on an older version is still writing.
 log_note() {
   case "$MODE" in status|limits|doctor) return 0 ;; esac
-  echo "$(date '+%F %T') [$MODE] $1" >> "$LOG"
+  echo "$(date '+%F %T') [$MODE${OWN_VERSION:+ v$OWN_VERSION}] $1" >> "$LOG"
 }
 log_fetch_fail() { log_note "fetch failed: $1"; } # silent fetch failures used to leave no trace at all
 
 # Backoff after HTTP 401, 403 or 429. Without it every hook (past the 60 s cache) and every
 # cron tick asks again, which keeps the rate limit alive. The pause follows
 # Retry-After when the server sends a number of seconds, and otherwise doubles
-# from 5 minutes, capped at an hour. A successful fetch clears it.
+# from 5 minutes, capped at an hour.
+# A success does not wipe the slate. Clearing the pause on the first answer
+# that got through restarted every pause at 5 minutes, and a live install sat
+# in "5 min pause, one success, 429" for hours (252 refusals in a day). So for
+# an hour after the last refusal the file remembers the delay, the next one
+# doubles from it, and a success only spaces the next live request
+# BACKOFF_FIRST out. An hour without a refusal forgets it all.
 # One pause per account, like the state: another account has its own token
 # and limits, and its successful fetch must not lift this account's pause.
+#   {"until": epoch no live request before, "delay": last pause, s,
+#    "at": epoch of the last refusal}
 BACKOFF="$DIR/usage-monitor-backoff${ACCOUNT_KEY:+.$ACCOUNT_KEY}.json"
 BACKOFF_FIRST=300
 BACKOFF_MAX=3600
+BACKOFF_MEMORY=3600
 
 backoff_until() { # prints the epoch the backoff ends at, 0 when none
   "$JQ" -r '.until // 0' "$BACKOFF" 2>/dev/null || echo 0
@@ -212,8 +254,13 @@ backoff_active() {
 }
 
 backoff_start() { # $1 = Retry-After value from the response, may be empty
-  local prev delay
-  prev=$("$JQ" -r '.delay // 0' "$BACKOFF" 2>/dev/null || echo 0)
+  local prev delay now
+  now=$(date +%s)
+  # The last delay counts only while the refusal that set it is recent. A file
+  # an older version wrote has no "at" and counts as recent once.
+  prev=$("$JQ" -r --argjson now "$now" --argjson mem "$BACKOFF_MEMORY" '
+    if ($now - (.at // $now)) < $mem then (.delay // 0) else 0 end' "$BACKOFF" 2>/dev/null || echo 0)
+  case "$prev" in ''|*[!0-9]*) prev=0 ;; esac
   # The usage endpoint answers its 429s with "Retry-After: 0" (seen 34 times
   # in a row on a live install), and taken literally that meant a one-minute
   # pause that never grew — the monitor kept the rate limit alive. Claude
@@ -228,12 +275,26 @@ backoff_start() { # $1 = Retry-After value from the response, may be empty
   fi
   [ "$delay" -lt 60 ] && delay=60
   [ "$delay" -gt "$BACKOFF_MAX" ] && delay=$BACKOFF_MAX
-  "$JQ" -n --argjson u "$(( $(date +%s) + delay ))" --argjson d "$delay" \
-    '{until: $u, delay: $d}' > "$BACKOFF" 2>/dev/null || true
+  "$JQ" -n --argjson u "$(( now + delay ))" --argjson d "$delay" --argjson a "$now" \
+    '{until: $u, delay: $d, at: $a}' > "$BACKOFF" 2>/dev/null || true
   echo "$delay"
 }
 
-backoff_clear() { rm -f "$BACKOFF"; }
+# After a success: within BACKOFF_MEMORY of the last refusal, keep the delay
+# and space the next live request BACKOFF_FIRST out; past it, forget.
+backoff_success() {
+  [ -f "$BACKOFF" ] || return 0
+  local now at
+  now=$(date +%s)
+  at=$("$JQ" -r '.at // 0' "$BACKOFF" 2>/dev/null || echo 0)
+  case "$at" in ''|*[!0-9]*) at=0 ;; esac
+  if [ $(( now - at )) -lt "$BACKOFF_MEMORY" ]; then
+    "$JQ" --argjson u "$(( now + BACKOFF_FIRST ))" '.until = $u' "$BACKOFF" > "$BACKOFF.$$.tmp" 2>/dev/null \
+      && mv -f "$BACKOFF.$$.tmp" "$BACKOFF" || rm -f "$BACKOFF.$$.tmp" "$BACKOFF"
+  else
+    rm -f "$BACKOFF"
+  fi
+}
 
 # Portable timeout: macOS ships neither `timeout` nor `gtimeout` by default,
 # but /usr/bin/perl is always present. alarm() fires in the perl process and
@@ -363,7 +424,7 @@ fetch_usage() {
     retry_after=$(awk -F': *' 'tolower($1) == "retry-after" { gsub(/\r/, "", $2); print $2 }' "$headers" 2>/dev/null | tail -1)
     [ "$headers" != /dev/null ] && rm -f "$headers"
     if [ "$http_code" = "200" ] && echo "$resp" | "$JQ" -e '.limits' >/dev/null 2>&1; then
-      backoff_clear
+      backoff_success
       write_cache "$resp"
       record_history "$resp" "$fetch_started" api
       # Released only once the cache holds the answer the waiters will read.
@@ -791,6 +852,22 @@ if [ "$MODE" = "doctor" ]; then
           "Эта сессия работает на плагине $own_v, установлен $bin_v — перезапустите сессию."
     fi
   fi
+  # Other sessions on an older version, within the last hour: those new enough
+  # to skip their checks leave .stale-session; older ones still write, and
+  # their log lines carry no version.
+  if [ "$INSTALL" = "plugin" ]; then
+    stale_at=$(stat -f %m "$DIR/.stale-session" 2>/dev/null || echo 0)
+    if [ $(( NOW - stale_at )) -lt 3600 ]; then
+      stale_v=$(cat "$DIR/.stale-session" 2>/dev/null)
+      bad "Sessions on plugin ${stale_v:-?} are still open; their checks are skipped, so they show no warnings — restart them." \
+          "Открыты сессии на плагине ${stale_v:-?}: их проверки пропускаются, предупреждений в них не будет — перезапустите их."
+    fi
+    old_line=$(tail -n 500 "$LOG" 2>/dev/null | grep -E '^[0-9-]+ [0-9:]+ \[(hook|cron)\] ' | tail -n 1)
+    if [ -n "$old_line" ] && [ $(( NOW - $(log_time "$old_line") )) -lt 3600 ]; then
+      bad "A session on an older plugin version still writes the shared state (it can repeat warnings) — restart sessions opened before the update." \
+          "Сессия на старой версии плагина ещё пишет общее состояние (может повторять уведомления) — перезапустите сессии, открытые до обновления."
+    fi
+  fi
 
   if [ "${2:-}" = "--notify" ]; then
     notify_mac "$(notif_title)" "$(tr_ "Test notification" "Тестовое уведомление")"
@@ -1083,7 +1160,7 @@ fi
 
 if [ "${#MESSAGES[@]}" -gt 0 ]; then
   BODY=$(printf '%s\n' "${MESSAGES[@]}")
-  echo "$(date '+%F %T') [$MODE] ${BODY//$'\n'/ | }" >> "$LOG"
+  echo "$(date '+%F %T') [$MODE${OWN_VERSION:+ v$OWN_VERSION}] ${BODY//$'\n'/ | }" >> "$LOG"
   notify_mac "$(notif_title)" "$BODY"
   if [ "$MODE" = "hook" ]; then
     "$JQ" -n --arg msg "$BODY" '{systemMessage: $msg}'

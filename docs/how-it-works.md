@@ -229,8 +229,16 @@ script's is not; on a 429 it is skipped, since it would ask the same endpoint.
 Whatever the failure, the CLI refresh runs at most once per 5 minutes
 (`usage-monitor-cli-refresh` stamp): a lost network, a 5xx or a signed-out
 keychain would otherwise start a headless Claude Code on every agent tick. The pause lives in
-`usage-monitor-backoff.json` in the state directory and is cleared by the next
-successful fetch. During it no live request and no `claude -p /usage` refresh
+`usage-monitor-backoff.<key>.json` in the state directory (`until`, `delay`,
+`at` — the time of the last refusal). A success does not clear it at once:
+clearing it there restarted every pause at 5 minutes, and a live install sat
+in "5-minute pause, one success, 429" for hours. For an hour after the last
+refusal the delay is remembered — the next refusal doubles from it — and a
+success only moves `until` 5 minutes ahead, spacing the next live request out.
+An hour without a refusal removes the file. / После успеха пауза не
+сбрасывается сразу: час после последнего отказа задержка помнится и следующий
+отказ удваивает её, а успех лишь откладывает следующий запрос на 5 минут.
+During a pause no live request and no `claude -p /usage` refresh
 is made, and an idle statusline starts its background refresh only when
 Claude Code's own `cachedUsageUtilization` is newer than the cache (otherwise
 the refresh could only log "fallback unavailable" every 30 seconds); hook and cron stay silent, and `status` shows the last cache with
@@ -562,6 +570,23 @@ Now a bootstrap whose `VERSION` is older than `bin/.version` (compared with
 tells the user to restart that session. Removal still goes through: an option
 turned off is honoured whatever the version.
 
+The monitor itself follows the same rule. An older session's Stop and
+`SessionStart` hooks kept rewriting the shared state in their older shape —
+a pre-0.10.0 copy dropped the `forecast`/`unused` flags, so the newer copy
+announced ⏳ and ⌛ again — and kept their older backoff. Now
+`usage-monitor.sh` in `hook` or `cron` mode compares its own version (`VERSION`
+at the plugin root, `bin/.version` beside the mirror, `.limit-alerts-version`
+beside a classic copy) with `bin/.version`; an older copy makes no request,
+writes nothing, sends nothing and only touches `.stale-session` with its
+version. The background agent and the sessions started since do the checks.
+Every log line carries the version that wrote it (`[hook v0.11.2]`), and
+`doctor` warns about sessions on an older version seen in the last hour —
+from `.stale-session`, or from log lines with no version (copies older than
+this rule, which still write).
+
+Сессия на старой версии плагина больше не пишет общее состояние: её хуки
+ничего не делают, а `doctor` просит перезапустить такие сессии.
+
 The launchd plist is regenerated on every session start too, but the agent is
 reloaded only when the plist actually changed or the agent is not loaded.
 `SessionStart` also fires on resume, `/clear` and compaction; reloading each
@@ -609,6 +634,7 @@ plugin's data directory. `hooks.json` and both wrappers always pass
 | Path | Purpose |
 |---|---|
 | `bin/.version` | version of the mirrored copies |
+| `.stale-session` | version of an older session whose hooks skipped their checks (for `doctor`) |
 | `bin/usage-monitor.sh`, `bin/statusline-with-limits.sh` | mirrored copies |
 | `bin/cron.sh`, `bin/statusline.sh` | generated env wrappers |
 | `usage-monitor-cache.json`, `usage-monitor-state.json` | as in the classic install |
@@ -667,7 +693,7 @@ anti-spam state, duplicating every notification.
 | `~/.claude/scripts/statusline-base.cmd` | preserved previous statusline command (optional) |
 | `~/.claude/scripts/usage-monitor-cache.json` | cached API response |
 | `~/.claude/scripts/usage-monitor-state.<key>.json` | notification state, one per account (`usage-monitor-state.json` before 0.9.1) |
-| `~/.claude/scripts/usage-monitor-backoff.<key>.json` | pause after HTTP 401/403/429, one per account (exists only while one runs) |
+| `~/.claude/scripts/usage-monitor-backoff.<key>.json` | pause after HTTP 401/403/429, one per account (kept for an hour after the last refusal) |
 | `~/.claude/scripts/usage-monitor-cli-refresh` | stamp: last `claude -p /usage` refresh (at most one per 5 min) |
 | `~/.claude/scripts/usage-monitor-sl-refresh` | stamp: last background refresh started by the statusline |
 | `~/.claude/scripts/usage-monitor-observed` | freshest stdin reading seen by any session, shared by all statuslines |
