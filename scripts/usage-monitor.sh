@@ -1004,6 +1004,12 @@ fi
 
 if ! USAGE=$(fetch_usage); then
   [ "$MODE" = "status" ] || exit 0
+  next_en=""; next_ru=""
+  if backoff_active; then
+    next_at=$(date -r "$(backoff_until)" '+%H:%M')
+    next_en=" Rate limited, next attempt at ${next_at}."
+    next_ru=" Запросы ограничены, следующая попытка в ${next_at}."
+  fi
   if cache_is_mine && [ -s "$CACHE" ] && "$JQ" -e '.limits' "$CACHE" >/dev/null 2>&1; then
     USAGE=$(cat "$CACHE")
     cache_mtime=$(stat -f %m "$CACHE" 2>/dev/null || echo 0)
@@ -1014,22 +1020,29 @@ if ! USAGE=$(fetch_usage); then
       age_ru="$(( age_min / 60 )) ч"; age_en="$(( age_min / 60 )) h"
     fi
     cache_at=$(date -r "$cache_mtime" "+%d.%m %H:%M")
-    next_en=""; next_ru=""
-    if backoff_active; then
-      next_at=$(date -r "$(backoff_until)" '+%H:%M')
-      next_en=" Rate limited, next attempt at ${next_at}."
-      next_ru=" Запросы ограничены, следующая попытка в ${next_at}."
-    fi
     if [ "$LANG_UM" = "en" ]; then
       echo "⚠ No live data — showing the cache from ${cache_at} (${age_en} ago).${next_en} Details: $LOG"
     else
       echo "⚠ Свежих данных нет — показан кэш от ${cache_at} (${age_ru} назад).${next_ru} Подробности: $LOG"
     fi
   else
-    if [ "$LANG_UM" = "en" ]; then
-      echo "No usage data: the request failed and there is no cache yet. Details: $LOG"
+    # Why there is nothing to show: no cache at all, a cache that is another
+    # account's (or untagged, from before the account was known), or no way to
+    # tell whose a cache is.
+    if [ "$ACCOUNT_UNKNOWN" = "1" ]; then
+      why_en="the account is unknown (~/.claude.json does not parse), so no cache can be trusted"
+      why_ru="аккаунт не определён (~/.claude.json не читается), поэтому кэшу нельзя доверять"
+    elif [ -f "$CACHE" ] && ! cache_is_mine; then
+      why_en="the cache belongs to another account; the next successful check replaces it"
+      why_ru="кэш принадлежит другому аккаунту; следующая удачная проверка заменит его"
     else
-      echo "Нет данных о лимитах: запрос не удался, а кэша ещё нет. Подробности: $LOG"
+      why_en="there is no cache yet"
+      why_ru="кэша ещё нет"
+    fi
+    if [ "$LANG_UM" = "en" ]; then
+      echo "No usage data: the request failed and ${why_en}.${next_en} Details: $LOG"
+    else
+      echo "Нет данных о лимитах: запрос не удался, а ${why_ru}.${next_ru} Подробности: $LOG"
     fi
     exit 0
   fi
