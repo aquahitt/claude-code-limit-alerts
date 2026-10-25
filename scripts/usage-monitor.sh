@@ -516,10 +516,26 @@ fetch_usage() {
       return 0
     fi
   elif [ -n "$token" ]; then
+    # The response headers (for Retry-After) go through a temporary file. A
+    # run that is stopped mid-request removes it on the way out; one killed
+    # outright (kill -9) cannot, so the next request sweeps what is left. A
+    # request takes at most 10 s and runs under the fetch lock, so a file
+    # older than a minute is nobody's.
+    find "$DIR" -maxdepth 1 -name '.usage-headers.*' -mmin +1 -delete 2>/dev/null
     headers=$(mktemp "$DIR/.usage-headers.XXXXXX" 2>/dev/null) || headers=/dev/null
-    resp=$(curl -sS --max-time 10 -D "$headers" -w '\n%{http_code}' https://api.anthropic.com/api/oauth/usage \
-      -H "Authorization: Bearer $token" \
-      -H "anthropic-beta: oauth-2025-04-20" 2>/dev/null)
+    # fetch_usage always runs in $(...), so the traps belong to that subshell;
+    # the path is kept outside the local, which is gone by the time EXIT fires.
+    if [ "$headers" != /dev/null ]; then
+      HEADERS_TMP="$headers"
+      trap 'rm -f "${HEADERS_TMP:-}"' EXIT
+      trap 'rm -f "${HEADERS_TMP:-}"; exit 1' INT TERM HUP
+    fi
+    # The token goes to curl on stdin (-H @-), not in its arguments: those are
+    # visible in the process list to every process of the user while the
+    # request runs (up to 10 s).
+    resp=$(printf 'Authorization: Bearer %s\n' "$token" \
+      | curl -sS --max-time 10 -D "$headers" -w '\n%{http_code}' https://api.anthropic.com/api/oauth/usage \
+          -H @- -H "anthropic-beta: oauth-2025-04-20" 2>/dev/null)
     http_code="${resp##*$'\n'}"
     resp="${resp%$'\n'*}"
     retry_after=$(awk -F': *' 'tolower($1) == "retry-after" { gsub(/\r/, "", $2); print $2 }' "$headers" 2>/dev/null | tail -1)

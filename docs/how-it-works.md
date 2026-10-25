@@ -6,7 +6,12 @@ Claude Code's `/usage` command queries `GET https://api.anthropic.com/api/oauth/
 with the subscription OAuth token and the `anthropic-beta: oauth-2025-04-20` header.
 This project uses the same endpoint. The token is read from the macOS Keychain
 item `Claude Code-credentials` (`security find-generic-password`), so no extra
-credentials are ever stored.
+credentials are ever stored. It reaches `curl` on stdin (`-H @-`), never in
+its arguments, which any process of the user could read from the process list
+while a request runs.
+
+Токен берётся из Keychain и передаётся `curl` через stdin, а не в аргументах:
+аргументы процесса видны в `ps` любому процессу пользователя.
 
 Relevant response fragment:
 
