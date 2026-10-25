@@ -245,7 +245,11 @@ What is keyed:
   `accountUuid` is the account this check is keyed by.
 
 The single state file of ≤ 0.9.0 is adopted by the first account seen and
-retired. Without an OAuth sign-in nothing is tagged, as before.
+retired — only while no account has a state of its own, that is, on the
+upgrade itself. Found later, an untagged state is what a run without a known
+account left behind (before 0.11.5) and is deleted, so a new account starts
+clean instead of with another one's windows and thresholds. Without an OAuth
+sign-in nothing is tagged, as before.
 
 Состояние антиспама, пауза после ошибок, кэш и общее наблюдение statusline
 привязаны к аккаунту и организации: переключение аккаунтов больше не выглядит
@@ -257,7 +261,10 @@ Keychain, по которому пришли цифры: один раз на т
 токен, `doctor` это показывает. Если `~/.claude.json` не читается (Claude Code
 переписывает его постоянно) и аккаунт токена неизвестен, проверка ничего не
 пишет. Кэш без метки аккаунта — только для установки вообще без входа; для
-вошедшего аккаунта он чужой и не показывается.
+вошедшего аккаунта он чужой и не показывается. Общий файл состояния без
+метки переносится к аккаунту только при обновлении с ≤ 0.9.0, когда других
+файлов состояния ещё нет; позже он считается остатком запуска без аккаунта и
+удаляется.
 
 ### Rate limiting / Ограничение частоты
 

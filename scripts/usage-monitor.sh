@@ -228,8 +228,16 @@ if [ -n "$ACCOUNT_KEY" ]; then
   STATE="$DIR/usage-monitor-state.$ACCOUNT_KEY.json"
   # One-time move from the single shared state of <= 0.9.0: seed the first
   # account seen from it, then retire it so another account starts clean.
-  if [ ! -f "$STATE" ] && [ -f "$DIR/usage-monitor-state.json" ]; then
-    mv "$DIR/usage-monitor-state.json" "$STATE" 2>/dev/null || true
+  # Only while no account has a state of its own yet — that is the upgrade.
+  # Later an untagged state is what a run without a known account left
+  # behind (before 0.11.5), and handing it to the next new account gave that
+  # account another one's windows and thresholds.
+  if [ -f "$DIR/usage-monitor-state.json" ]; then
+    if ls "$DIR"/usage-monitor-state.*.json >/dev/null 2>&1; then
+      rm -f "$DIR/usage-monitor-state.json"
+    elif [ ! -f "$STATE" ]; then
+      mv "$DIR/usage-monitor-state.json" "$STATE" 2>/dev/null || true
+    fi
   fi
 fi
 
