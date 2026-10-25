@@ -59,12 +59,14 @@ JQ="$(command -v jq || echo /opt/homebrew/bin/jq)"
 input=$(cat 2>/dev/null) || exit 0
 
 # The cache is trusted only for the account it was fetched for (see
-# usage-monitor.sh cache_is_mine).
-ACCOUNT=$("$JQ" -r '.oauthAccount // {} | select(.accountUuid != null)
-  | "\(.accountUuid):\(.organizationUuid // "")"' "$HOME/.claude.json" 2>/dev/null)
-if [ -n "$ACCOUNT" ]; then
-  "$JQ" -e --arg a "$ACCOUNT" '(._account // $a) == $a' "$CACHE" >/dev/null 2>&1 || exit 0
+# usage-monitor.sh cache_is_mine): an untagged one only without a sign-in, and
+# none while ~/.claude.json does not parse.
+ACCOUNT=""
+if [ -f "$HOME/.claude.json" ]; then
+  ACCOUNT=$("$JQ" -r '.oauthAccount // {} | select(.accountUuid != null)
+    | "\(.accountUuid):\(.organizationUuid // "")"' "$HOME/.claude.json" 2>/dev/null) || exit 0
 fi
+"$JQ" -e --arg a "$ACCOUNT" '(._account // "") == $a' "$CACHE" >/dev/null 2>&1 || exit 0
 
 model=$(printf '%s' "$input" | "$JQ" -r '.tool_input.model // empty | ascii_downcase' 2>/dev/null)
 

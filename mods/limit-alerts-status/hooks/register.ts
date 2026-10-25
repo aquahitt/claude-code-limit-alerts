@@ -70,18 +70,26 @@ async function readJson<T>($: EngineInterface, path: string): Promise<T | undefi
 
 // The signed-in account as usage-monitor.sh keys it, from ~/.claude.json:
 // `id` (account:organization) tags the cache, `key` (their first 8 chars)
-// names the per-account pause file. Undefined when it cannot be read; then
-// the cache is taken as is and the untagged pause file is read, as before.
-async function currentAccount($: EngineInterface): Promise<{ id: string; key: string } | undefined> {
+// names the per-account pause file. Null when there is no sign-in (no file,
+// no oauthAccount): then only an untagged cache and the untagged pause file
+// are this install's. Undefined when the file is there but does not parse —
+// Claude Code rewrites it constantly — and then no cache is anyone's.
+async function currentAccount($: EngineInterface): Promise<{ id: string; key: string } | null | undefined> {
   const home = await $.env.get('HOME')
   if (!home) {
+    return null
+  }
+  const path = `${home}/.claude.json`
+  if (await mtime($, path) === undefined) {
+    return null
+  }
+  const cfg = await readJson<{ oauthAccount?: { accountUuid?: string; organizationUuid?: string } }>($, path)
+  if (cfg === undefined) {
     return undefined
   }
-  const cfg = await readJson<{ oauthAccount?: { accountUuid?: string; organizationUuid?: string } }>(
-    $, `${home}/.claude.json`)
-  const a = cfg?.oauthAccount
+  const a = cfg.oauthAccount
   if (!a?.accountUuid) {
-    return undefined
+    return null
   }
   const org = a.organizationUuid ?? ''
   return { id: `${a.accountUuid}:${org}`, key: `${a.accountUuid.slice(0, 8)}-${org.slice(0, 8)}` }
@@ -120,8 +128,9 @@ async function buildReport($: EngineInterface, options: PluginOptions): Promise<
     const cachePath = `${dir}/${CACHE_FILE}`
     const cacheMtime = await mtime($, cachePath)
     const cache = cacheMtime === undefined ? undefined : await readJson<Cache>($, cachePath)
-    // Another account's cache (after switching accounts) is not this one's.
-    const mine = !account || !cache?._account || cache._account === account.id
+    // Another account's cache (after switching accounts) is not this one's,
+    // and an untagged one belongs only to an install with no sign-in.
+    const mine = account !== undefined && (cache?._account ?? null) === (account?.id ?? null)
     if (cache && cacheMtime !== undefined && mine) {
       cached = fromCache(cache)
       report.cacheAgeMs = Math.max(0, now - cacheMtime)

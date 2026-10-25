@@ -204,9 +204,26 @@ reports the same news. A lock older than a minute is treated as abandoned.
 
 One machine can sign in to several accounts in turn, and one person can be
 in several organizations (a personal plan and a Team seat) with separate
-limits. Everything is keyed by **account + organization** — `accountUuid` and
-`organizationUuid` from `oauthAccount` in `~/.claude.json`, the current
-sign-in:
+limits. Everything is keyed by **account + organization** of the Keychain
+token the numbers were fetched with:
+
+- the token carries no account id, so once per token the monitor asks
+  `GET /api/oauth/profile` (the endpoint Claude Code uses for the same
+  purpose) for `account.uuid` and `organization.uuid`, and remembers the
+  answer in `usage-monitor-accounts.json` under a hash of the token — never
+  the token itself. Access tokens live for hours, so that is a few requests a
+  day; the token goes to `curl` on stdin, not in its arguments;
+- until the profile is known, or while it cannot be fetched (retried after
+  10 minutes), `oauthAccount` in `~/.claude.json` decides, as before. The two
+  can disagree for a moment after switching accounts — Keychain and
+  `~/.claude.json` are not written together — and then the token wins: the
+  numbers are its account's. `doctor` shows the disagreement;
+- `~/.claude.json` is ~100 KB and rewritten all the time, so a read can catch
+  half a file. A failed parse is retried three times; if the file still does
+  not parse and the token's account is not known, the account is unknown and
+  the check writes nothing — no cache, state, history or pause.
+
+What is keyed:
 
 - the anti-spam state and the 401/403/429 pause live in one file per account
   (`usage-monitor-state.<key>.json`, `usage-monitor-backoff.<key>.json`), so
@@ -214,17 +231,28 @@ sign-in:
   does not re-arm the 🟡/🔴 warnings; switching back finds the account's own
   state, and one account's successful fetch does not lift another's pause;
 - the cache carries an `_account` tag and is used only by its account; the
-  statusline treats another account's cache as missing and refreshes it;
+  statusline treats another account's cache as missing and refreshes it. An
+  untagged cache belongs only to an install with no sign-in at all — for a
+  signed-in account it is someone else's (`status`, the statusline, the
+  fan-out guard and `/limits` all ignore it, and the next fetch replaces it);
 - the statuslines' shared observation carries the account too;
 - the `claude -p /usage` fallback reads `cachedUsageUtilization` only when its
-  `accountUuid` is the signed-in one, as Claude Code itself does.
+  `accountUuid` is the account this check is keyed by.
 
 The single state file of ≤ 0.9.0 is adopted by the first account seen and
 retired. Without an OAuth sign-in nothing is tagged, as before.
 
 Состояние антиспама, пауза после ошибок, кэш и общее наблюдение statusline
-привязаны к аккаунту и организации из `~/.claude.json`: переключение
-аккаунтов больше не выглядит как сброс окна и не показывает чужие цифры.
+привязаны к аккаунту и организации: переключение аккаунтов больше не выглядит
+как сброс окна и не показывает чужие цифры. Аккаунт берётся у токена из
+Keychain, по которому пришли цифры: один раз на токен монитор спрашивает
+`GET /api/oauth/profile` и запоминает ответ в `usage-monitor-accounts.json` под
+хешем токена (не самим токеном). Пока ответа нет — по `oauthAccount` из
+`~/.claude.json`; если они расходятся (сразу после смены аккаунта), побеждает
+токен, `doctor` это показывает. Если `~/.claude.json` не читается (Claude Code
+переписывает его постоянно) и аккаунт токена неизвестен, проверка ничего не
+пишет. Кэш без метки аккаунта — только для установки вообще без входа; для
+вошедшего аккаунта он чужой и не показывается.
 
 ### Rate limiting / Ограничение частоты
 
@@ -710,6 +738,7 @@ anti-spam state, duplicating every notification.
 | `~/.claude/scripts/usage-history.<key>.jsonl` | readings history for the forecast, one per account |
 | `~/.claude/scripts/statusline-base.cmd` | preserved previous statusline command (optional) |
 | `~/.claude/scripts/usage-monitor-cache.json` | cached API response |
+| `~/.claude/scripts/usage-monitor-accounts.json` | account of each recent Keychain token, by token hash (last 10) |
 | `~/.claude/scripts/usage-monitor-state.<key>.json` | notification state, one per account (`usage-monitor-state.json` before 0.9.1) |
 | `~/.claude/scripts/usage-monitor-backoff.<key>.json` | pause after HTTP 401/403/429, one per account (kept for an hour after the last refusal) |
 | `~/.claude/scripts/usage-monitor-cli-refresh` | stamp: last `claude -p /usage` refresh (at most one per 5 min) |

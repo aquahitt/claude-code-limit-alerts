@@ -100,11 +100,17 @@ from the same files with no copy.
   `usage-monitor-observed` (mkdir lock + retry), and a live request runs
   under `usage-monitor.fetch.lock` so concurrent callers share one request.
 - **Usage data is per account.** The key is `accountUuid:organizationUuid`
-  from `oauthAccount` in `~/.claude.json` (the user switches accounts; one
-  person can hold a personal plan and a Team seat). State and backoff are one
-  file per account (`*.<key>.json`, key = first 8 chars of each); the cache
-  and `usage-monitor-observed` carry the account and are ignored for any
-  other. Never add a new shared usage file without the same tag.
+  (the user switches accounts; one person can hold a personal plan and a Team
+  seat). `usage-monitor.sh` takes it from the Keychain token itself — one
+  `/api/oauth/profile` request per token, remembered by token hash in
+  `usage-monitor-accounts.json` — and falls back to `oauthAccount` in
+  `~/.claude.json`; the statusline, fan-out guard and mod read
+  `~/.claude.json` only. State and backoff are one file per account
+  (`*.<key>.json`, key = first 8 chars of each); the cache and
+  `usage-monitor-observed` carry the account and are ignored for any other.
+  An untagged cache is only a no-sign-in install's, and an unparsable
+  `~/.claude.json` means "account unknown" — write nothing, trust no cache.
+  Never add a new shared usage file without the same tag.
 - **Every hook script exits at once on `UM_INTERNAL=1`.** `usage-monitor.sh`
   sets it on its headless `claude -p /usage` refresh, which fires this
   project's own hooks; without the early exit each refresh made one more
