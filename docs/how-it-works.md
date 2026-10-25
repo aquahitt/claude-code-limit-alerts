@@ -266,6 +266,52 @@ Keychain, по которому пришли цифры: один раз на т
 файлов состояния ещё нет; позже он считается остатком запуска без аккаунта и
 удаляется.
 
+### Separate config directories / Отдельные каталоги конфигурации
+
+Claude Code can run with `CLAUDE_CONFIG_DIR=<dir>` — a separate configuration
+with its own sign-in. Every script finds its files the way Claude Code does:
+
+| What | Default | With `CLAUDE_CONFIG_DIR=X` |
+|---|---|---|
+| global config (account, `cachedUsageUtilization`) | `~/.claude.json` | `X/.claude.json` |
+| settings (statusline, `pluginConfigs`, `autoCompactWindow`) | `~/.claude/settings.json` | `X/settings.json` |
+| sessions, tasks | `~/.claude/sessions/`, `~/.claude/tasks/` | `X/sessions/`, `X/tasks/` |
+| Keychain entry | `Claude Code-credentials` | `Claude Code-credentials-<first 8 hex of sha256(X)>` |
+
+`X` is taken exactly as given — `X` and `X/` are two Keychain entries to
+Claude Code too. A non-empty legacy `.config.json` in the configuration
+directory wins over `.claude.json`, as in Claude Code. So a hook, the
+statusline and `status` in such a session show and store that session's
+account; the plugin installed there keeps its state in `X/plugins/data/…`,
+and its bootstrap edits `X/settings.json`, not `~/.claude/settings.json`.
+
+The background agent is one per macOS user and checks the default
+configuration's account — the same stance as Claude Code's own daemon, which
+refuses to install under `CLAUDE_CONFIG_DIR`. Only the plugin of the default
+configuration creates or updates it; a plugin under `CLAUDE_CONFIG_DIR` says
+so once, leaves the agent alone and removes it only if the plist points at
+its own data. Without that, two installations rewrote the plist for their own
+data directory on every session start. Under `CLAUDE_CONFIG_DIR` limits are
+checked on turns and by the statusline. `install.sh` always works with
+`~/.claude`.
+
+`CLAUDE_CONFIG_DIR=<каталог>` запускает Claude Code с отдельной конфигурацией
+и своим входом. Скрипты ищут файлы так же, как Claude Code: `X/.claude.json`
+вместо `~/.claude.json`, `X/settings.json`, `X/sessions/`, `X/tasks/` и запись
+Keychain `Claude Code-credentials-<первые 8 hex sha256(X)>`. Значение берётся
+как есть: `X` и `X/` для Claude Code тоже разные записи. Хуки, statusline и
+`status` в такой сессии показывают и сохраняют её аккаунт; плагин, установленный
+там, хранит состояние в `X/plugins/data/…` и правит `X/settings.json`.
+
+Фоновый агент один на пользователя macOS и проверяет аккаунт конфигурации по
+умолчанию, как и собственный демон Claude Code, который с `CLAUDE_CONFIG_DIR`
+не устанавливается. Создаёт и обновляет агента только плагин конфигурации по
+умолчанию. Плагин из `CLAUDE_CONFIG_DIR` один раз сообщает об этом, агента не
+трогает и удаляет его, только если plist указывает на его собственные данные.
+Иначе две установки на каждом старте сессии переписывали plist под свой
+каталог. С `CLAUDE_CONFIG_DIR` лимиты проверяются на ходах и статусной строкой.
+`install.sh` всегда работает с `~/.claude`.
+
 ### Rate limiting / Ограничение частоты
 
 When the usage endpoint answers **429, 403 or 401**, live requests pause: for

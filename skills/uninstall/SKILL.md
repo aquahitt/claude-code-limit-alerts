@@ -5,7 +5,7 @@ description: Use when the user wants to remove limit-alerts, disable the plugin 
 
 # Remove what the plugin wrote outside itself
 
-Disabling a plugin does not undo writes it made elsewhere. Two things outlive it: the `statusLine` entry in `~/.claude/settings.json` and the launchd agent `com.claude.usage-monitor.plugin`.
+Disabling a plugin does not undo writes it made elsewhere. Two things outlive it: the `statusLine` entry in `settings.json` (`~/.claude/settings.json`, or the one in `$CLAUDE_CONFIG_DIR` when the session runs with it) and the launchd agent `com.claude.usage-monitor.plugin`. Under `CLAUDE_CONFIG_DIR` the agent is removed only if this installation created it; the default configuration's agent stays.
 
 Remove both by turning the options off and re-running the bootstrap:
 

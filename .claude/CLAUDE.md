@@ -111,6 +111,18 @@ from the same files with no copy.
   An untagged cache is only a no-sign-in install's, and an unparsable
   `~/.claude.json` means "account unknown" — write nothing, trust no cache.
   Never add a new shared usage file without the same tag.
+- **`CLAUDE_CONFIG_DIR` moves Claude Code's files, so ours follow.** Every
+  script reads `${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json` (a non-empty
+  `<config dir>/.config.json` wins), `${CLAUDE_CONFIG_DIR:-$HOME/.claude}/…`
+  for settings, sessions and tasks, and the Keychain entry
+  `Claude Code-credentials-<sha256(dir)[0:8]>` — the variable as given, not
+  resolved, exactly as Claude Code computes it. Never hard-code
+  `$HOME/.claude.json` or `~/.claude/settings.json` in a hook-side script.
+  The launchd agent is the exception: one per macOS user, owned by the
+  default configuration's plugin. A bootstrap under another
+  `CLAUDE_CONFIG_DIR` leaves it alone (it only removes a plist pointing at its
+  own data) — otherwise two installs rewrote the plist on every session start.
+  `install.sh` and its state stay on `~/.claude`.
 - **Every hook script exits at once on `UM_INTERNAL=1`.** `usage-monitor.sh`
   sets it on its headless `claude -p /usage` refresh, which fires this
   project's own hooks; without the early exit each refresh made one more

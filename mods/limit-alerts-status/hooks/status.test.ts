@@ -136,10 +136,13 @@ describe('report', () => {
 const HOME = '/Users/test'
 const DIR = `${HOME}/.claude/scripts`
 
-function world(on: On, files: Record<string, { text: string; mtimeMs: number }>, rateLimits: SessionRateLimit[]) {
+function world(
+  on: On, files: Record<string, { text: string; mtimeMs: number }>, rateLimits: SessionRateLimit[],
+  env: Record<string, string> = {},
+) {
   const registered: string[] = []
   const statuses: (string | undefined)[] = []
-  mock.env(on, { HOME })
+  mock.env(on, { HOME, ...env })
   mock.clock(on, { now: NOW })
   on('fs.read', (_$, e) => (files[e.path] ? { value: files[e.path]!.text } : { deny: `ENOENT: ${e.path}` }))
   on('fs.stat', (_$, e) => {
@@ -254,6 +257,25 @@ describe('mod', () => {
     await $.session.start(START)
     const { text } = await $.command.run(RUN)
     expect(text).not.toContain('61%')
+  })
+
+  test('takes the account from CLAUDE_CONFIG_DIR, not from ~/.claude.json', async ($, on) => {
+    const profile = `${HOME}/.claude-work`
+    const signIn = (id: string) => JSON.stringify({ oauthAccount: { accountUuid: id, organizationUuid: 'org' } })
+    const cache = (id: string) => JSON.stringify({
+      _account: `${id}:org`, five_hour: { utilization: 61 }, seven_day: { utilization: 9 },
+    })
+    const files = {
+      [`${HOME}/.claude.json`]: { text: signIn('global'), mtimeMs: NOW },
+      [`${profile}/.claude.json`]: { text: signIn('work'), mtimeMs: NOW },
+      [`${DIR}/usage-monitor-cache.json`]: { text: cache('global'), mtimeMs: NOW - 60_000 },
+    }
+    world(on, files, [], { CLAUDE_CONFIG_DIR: profile })
+    await $.session.start(START)
+    expect((await $.command.run(RUN)).text).not.toContain('61%')
+
+    files[`${DIR}/usage-monitor-cache.json`] = { text: cache('work'), mtimeMs: NOW - 60_000 }
+    expect((await $.command.run(RUN)).text).toContain('Сессия (5ч): 61%')
   })
 
   test('falls back to the cache before the session has talked to the API', async ($, on) => {

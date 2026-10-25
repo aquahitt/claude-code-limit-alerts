@@ -46,7 +46,9 @@ fi
 DIR="${UM_STATE_DIR:-$HOME/.claude/scripts}"
 mkdir -p "$DIR" 2>/dev/null || true
 STATE="$DIR/compact-advisor-state.json"
-SETTINGS="$HOME/.claude/settings.json"
+# Claude Code's configuration directory: CLAUDE_CONFIG_DIR, else ~/.claude.
+CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+SETTINGS="$CLAUDE_DIR/settings.json"
 
 JQ="$(command -v jq || echo /opt/homebrew/bin/jq)"
 [ -x "$JQ" ] || exit 0
@@ -84,7 +86,7 @@ case "$tokens" in ''|*[!0-9]*) exit 0 ;; esac
 [ "$has_tool" = "0" ] || exit 0
 
 # condition 3: no unfinished tasks for this session
-tasks_dir="$HOME/.claude/tasks/$sid"
+tasks_dir="$CLAUDE_DIR/tasks/$sid"
 if [ -d "$tasks_dir" ]; then
   for f in "$tasks_dir"/*.json; do
     [ -f "$f" ] || continue

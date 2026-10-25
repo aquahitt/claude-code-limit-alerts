@@ -510,6 +510,13 @@ pause after errors, and the cache and the statusline show only the current
 account's numbers. Switching causes no false "♻️ reset" and no repeated
 warnings.
 
+**I run Claude Code with `CLAUDE_CONFIG_DIR` — is that supported?**
+Yes. In such a session the hooks, the statusline and `status` use that
+configuration's account, Keychain token and settings, not `~/.claude`'s. The
+background agent is one per user and checks the default configuration; under
+`CLAUDE_CONFIG_DIR` limits are checked on turns and by the statusline. Details:
+[docs/how-it-works.md](docs/how-it-works.md#separate-config-directories--отдельные-каталоги-конфигурации).
+
 **Does it work with Team and Enterprise, not just a personal plan?**
 Yes — the data sources are the same for any claude.ai sign-in. The statusline
 takes 5h/7d from what Claude Code itself passes it from API responses, which

@@ -60,11 +60,16 @@ input=$(cat 2>/dev/null) || exit 0
 
 # The cache is trusted only for the account it was fetched for (see
 # usage-monitor.sh cache_is_mine): an untagged one only without a sign-in, and
-# none while ~/.claude.json does not parse.
+# none while .claude.json does not parse.
+# Claude Code's configuration directory and global config, CLAUDE_CONFIG_DIR
+# honoured the way Claude Code does it (see usage-monitor.sh).
+CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+CLAUDE_JSON="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
+[ -s "$CLAUDE_DIR/.config.json" ] && CLAUDE_JSON="$CLAUDE_DIR/.config.json"
 ACCOUNT=""
-if [ -f "$HOME/.claude.json" ]; then
+if [ -f "$CLAUDE_JSON" ]; then
   ACCOUNT=$("$JQ" -r '.oauthAccount // {} | select(.accountUuid != null)
-    | "\(.accountUuid):\(.organizationUuid // "")"' "$HOME/.claude.json" 2>/dev/null) || exit 0
+    | "\(.accountUuid):\(.organizationUuid // "")"' "$CLAUDE_JSON" 2>/dev/null) || exit 0
 fi
 "$JQ" -e --arg a "$ACCOUNT" '(._account // "") == $a' "$CACHE" >/dev/null 2>&1 || exit 0
 
