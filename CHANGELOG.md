@@ -4,6 +4,8 @@
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-10-26
+
 ### Added
 
 - Экспериментальный mod `mods/limit-alerts-status/` — отдельный плагин на
