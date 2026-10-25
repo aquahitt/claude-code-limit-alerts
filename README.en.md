@@ -311,11 +311,34 @@ picked up. A backup of `~/.claude/settings.json` is created before any change.
 
 ## Update
 
-The plugin updates through `/plugin` — Claude Code pulls the new version
-itself. The script mirror in the data directory is rebuilt automatically on the
-first session start after the update.
+### Plugin
 
-The classic install:
+Claude Code updates only the official marketplaces by itself; this one is a
+third-party marketplace, so pull a new version yourself, either way:
+
+- from a terminal — the command refreshes the marketplace catalogue and
+  installs the latest version:
+  ```bash
+  claude plugin update limit-alerts@claude-code-limit-alerts
+  ```
+- in Claude Code — `/plugin` → Marketplaces → `claude-code-limit-alerts`:
+  update the catalogue, then the plugin. Auto-update can be turned on there
+  too — Claude Code then checks for a new version on every start.
+
+**Restart Claude Code after the update.** Until then:
+
+- open sessions keep the hooks of the version they started with. From 0.11.3
+  on, such a session leaves the checks to the installed version — no
+  duplicates, no outdated notifications; sessions on earlier versions keep
+  checking on their own;
+- the statusline and the background agent run from a copy of the scripts in
+  the plugin's data directory, which is refreshed on the first session start
+  on the new version.
+
+Which version runs: the first line of `/limit-alerts:status`.
+`/limit-alerts:doctor` warns when a session is still on an older one.
+
+### Classic install
 
 ```bash
 git pull
