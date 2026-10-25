@@ -341,13 +341,20 @@ pick_window() { # $1 pct A, $2 reset A, $3 pct B, $4 reset B ("" = absent) -> "p
 
 # The signed-in account (account + organization, see usage-monitor.sh): the
 # cache and the shared observations are used only when they belong to it, so
-# switching accounts never shows the previous account's numbers.
+# switching accounts never shows the previous account's numbers. An untagged
+# cache is only an install's with no sign-in at all. ~/.claude.json caught
+# mid-rewrite does not parse: then the account is unknown for this redraw,
+# and neither the cache nor the shared observations are used or written.
 ACCOUNT=""
-[ -x "$JQ" ] && ACCOUNT=$("$JQ" -r '.oauthAccount // {} | select(.accountUuid != null)
-  | "\(.accountUuid):\(.organizationUuid // "")"' "$HOME/.claude.json" 2>/dev/null)
+ACCOUNT_UNKNOWN=0
+if [ -x "$JQ" ] && [ -f "$HOME/.claude.json" ]; then
+  ACCOUNT=$("$JQ" -r '.oauthAccount // {} | select(.accountUuid != null)
+    | "\(.accountUuid):\(.organizationUuid // "")"' "$HOME/.claude.json" 2>/dev/null) \
+    || { ACCOUNT=""; ACCOUNT_UNKNOWN=1; }
+fi
 CACHE_MINE=0
-if [ -f "$CACHE" ] && [ -x "$JQ" ]; then
-  if [ -z "$ACCOUNT" ] || "$JQ" -e --arg a "$ACCOUNT" '(._account // $a) == $a' "$CACHE" >/dev/null 2>&1; then
+if [ -f "$CACHE" ] && [ -x "$JQ" ] && [ "$ACCOUNT_UNKNOWN" = "0" ]; then
+  if "$JQ" -e --arg a "$ACCOUNT" '(._account // "") == $a' "$CACHE" >/dev/null 2>&1; then
     CACHE_MINE=1
   fi
 fi
@@ -394,7 +401,7 @@ if [ -x "$JQ" ]; then
   read -r m7 mr7 <<< "$(pick_window "$s7" "${sr7:-0}" "$o7" "${or7:-0}")"
   merged="${ACCOUNT:--} ${m5:--} ${mr5:-0} ${m7:--} ${mr7:-0}"
   if [ "$have_obs_lock" = "1" ]; then
-    if [ "$merged" != "${oacct:--} ${o5:--} ${or5:-0} ${o7:--} ${or7:-0}" ]; then
+    if [ "$ACCOUNT_UNKNOWN" = "0" ] && [ "$merged" != "${oacct:--} ${o5:--} ${or5:-0} ${o7:--} ${or7:-0}" ]; then
       tmp_obs=$(mktemp "$observed.XXXXXX" 2>/dev/null) \
         && printf '%s\n' "$merged" > "$tmp_obs" && mv -f "$tmp_obs" "$observed" 2>/dev/null
       [ -n "${tmp_obs:-}" ] && rm -f "$tmp_obs" 2>/dev/null

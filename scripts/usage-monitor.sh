@@ -134,8 +134,95 @@ fi
 # account (files named after ACCOUNT_KEY): without that, switching
 # accounts read as a window reset ("♻️ 67% → 37%") and re-armed the warnings.
 # Empty when there is no OAuth sign-in: then nothing is tagged, as before.
-ACCOUNT=$("$JQ" -r '.oauthAccount // {} | select(.accountUuid != null)
-  | "\(.accountUuid):\(.organizationUuid // "")"' "$HOME/.claude.json" 2>/dev/null)
+#
+# Claude Code rewrites ~/.claude.json all the time (it is ~100 KB), and a
+# read can land on half a file. An empty ACCOUNT from that used to write an
+# untagged cache, which every account took for its own. So a failed parse is
+# retried, and if the file stays unreadable the account counts as unknown
+# (ACCOUNT_UNKNOWN=1): nothing is written for it — see below. A file that
+# parses but has no oauthAccount is a real "no sign-in".
+CLAUDE_JSON="$HOME/.claude.json"
+ACCOUNT=""
+ACCOUNT_UNKNOWN=0
+if [ -f "$CLAUDE_JSON" ]; then
+  ACCOUNT_UNKNOWN=1
+  for _try in 1 2 3; do
+    if ACCOUNT=$("$JQ" -r '.oauthAccount // {} | select(.accountUuid != null)
+         | "\(.accountUuid):\(.organizationUuid // "")"' "$CLAUDE_JSON" 2>/dev/null); then
+      ACCOUNT_UNKNOWN=0
+      break
+    fi
+    ACCOUNT=""
+    sleep 0.1
+  done
+fi
+OAUTH_ACCOUNT="$ACCOUNT"
+
+# The numbers come with the Keychain token, and ~/.claude.json names the
+# sign-in — two files that a switch of accounts (/login, or a tool that swaps
+# the Keychain entry) does not update at the same moment. In between, one
+# account's numbers were stored under the other's key, which read as a reset
+# and re-armed the warnings. So the token itself says whose it is: once per
+# token, /api/oauth/profile names its account and organization, and the
+# answer is remembered under a hash of the token (never the token):
+#   usage-monitor-accounts.json
+#   {"<sha256(token), 16 chars>": {"account": "<uuid>:<org uuid>", "at": epoch}
+#                               | {"failed": epoch}}
+# An access token lives for hours, so that is a few requests a day. When the
+# profile cannot be had, ~/.claude.json decides, as before; a failed lookup
+# is retried after PROFILE_RETRY seconds, not on every run.
+ACCOUNTS_MAP="$DIR/usage-monitor-accounts.json"
+ACCOUNTS_KEEP=10
+PROFILE_RETRY=600
+TOKEN=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null \
+  | "$JQ" -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
+TOKEN_ID=""
+[ -n "$TOKEN" ] && TOKEN_ID=$(printf '%s' "$TOKEN" | shasum -a 256 2>/dev/null | cut -c1-16)
+
+remember_token_account() { # $1 = JSON object to store for TOKEN_ID
+  local map
+  map=$("$JQ" -c 'if type == "object" then . else {} end' "$ACCOUNTS_MAP" 2>/dev/null) || map='{}'
+  printf '%s' "$map" | "$JQ" -c --arg t "$TOKEN_ID" --argjson v "$1" --argjson keep "$ACCOUNTS_KEEP" '
+    .[$t] = $v | to_entries | sort_by(.value.at // .value.failed // 0) | .[-$keep:] | from_entries' \
+    > "$ACCOUNTS_MAP.$$.tmp" 2>/dev/null && mv -f "$ACCOUNTS_MAP.$$.tmp" "$ACCOUNTS_MAP" 2>/dev/null \
+    || rm -f "$ACCOUNTS_MAP.$$.tmp"
+}
+
+# Prints "<uuid>:<org uuid>" for TOKEN, or nothing. The token goes to curl on
+# stdin, so it never shows in the process list.
+fetch_token_account() {
+  local resp http_code
+  resp=$(printf 'Authorization: Bearer %s\n' "$TOKEN" | curl -sS --max-time 5 -w '\n%{http_code}' \
+    https://api.anthropic.com/api/oauth/profile -H @- -H "anthropic-beta: oauth-2025-04-20" 2>/dev/null)
+  http_code="${resp##*$'\n'}"
+  [ "$http_code" = "200" ] || return 1
+  printf '%s' "${resp%$'\n'*}" | "$JQ" -r '
+    select((.account.uuid | type) == "string" and (.organization.uuid | type) == "string")
+    | "\(.account.uuid):\(.organization.uuid)"' 2>/dev/null
+}
+
+TOKEN_ACCOUNT=""
+if [ -n "$TOKEN_ID" ]; then
+  IFS='|' read -r TOKEN_ACCOUNT token_failed <<< "$("$JQ" -r --arg t "$TOKEN_ID" '
+    .[$t] // {} | [ (.account // ""), (.failed // 0) ] | map(tostring) | join("|")' "$ACCOUNTS_MAP" 2>/dev/null)"
+  case "${token_failed:-0}" in ''|*[!0-9]*) token_failed=0 ;; esac
+  # doctor makes no requests; status, limits and the checks may.
+  if [ -z "$TOKEN_ACCOUNT" ] && [ "$MODE" != "doctor" ] && \
+     [ $(( $(date +%s) - token_failed )) -ge "$PROFILE_RETRY" ]; then
+    if TOKEN_ACCOUNT=$(fetch_token_account) && [ -n "$TOKEN_ACCOUNT" ]; then
+      remember_token_account "$("$JQ" -n -c --arg a "$TOKEN_ACCOUNT" --argjson at "$(date +%s)" '{account: $a, at: $at}')"
+      [ -n "$OAUTH_ACCOUNT" ] && [ "$TOKEN_ACCOUNT" != "$OAUTH_ACCOUNT" ] && TOKEN_SOURCES_DIFFER=1
+    else
+      TOKEN_ACCOUNT=""
+      remember_token_account "{\"failed\": $(date +%s)}"
+      PROFILE_FAILED=1
+    fi
+  fi
+fi
+if [ -n "$TOKEN_ACCOUNT" ]; then
+  ACCOUNT="$TOKEN_ACCOUNT"
+  ACCOUNT_UNKNOWN=0
+fi
 ACCOUNT_KEY=$(printf '%s' "$ACCOUNT" | awk -F: 'NF { print substr($1, 1, 8) "-" substr($2, 1, 8) }')
 if [ -n "$ACCOUNT_KEY" ]; then
   STATE="$DIR/usage-monitor-state.$ACCOUNT_KEY.json"
@@ -147,15 +234,18 @@ if [ -n "$ACCOUNT_KEY" ]; then
 fi
 
 # The cache file is shared, so it is trusted only for the account it was
-# fetched for. A cache from <= 0.9.0 has no tag and counts as the current
-# account's once, until the next fetch tags it.
+# fetched for. An untagged cache belongs to an install with no sign-in at
+# all; for a signed-in account it is someone else's (it used to count as
+# anyone's, which mixed accounts), and the next fetch replaces it. With the
+# account unknown, no cache is trusted.
 cache_is_mine() {
   [ -f "$CACHE" ] || return 1
-  [ -n "$ACCOUNT" ] || return 0
-  "$JQ" -e --arg a "$ACCOUNT" '(._account // $a) == $a' "$CACHE" >/dev/null 2>&1
+  [ "$ACCOUNT_UNKNOWN" = "1" ] && return 1
+  "$JQ" -e --arg a "$ACCOUNT" '(._account // "") == $a' "$CACHE" >/dev/null 2>&1
 }
 
 write_cache() { # $1 = response JSON
+  [ "$ACCOUNT_UNKNOWN" = "1" ] && return 0
   if [ -n "$ACCOUNT" ]; then
     printf '%s' "$1" | "$JQ" -c --arg a "$ACCOUNT" '. + {_account: $a}' > "$CACHE" 2>/dev/null \
       || printf '%s\n' "$1" > "$CACHE"
@@ -182,6 +272,7 @@ JQ_EPOCH='def epoch: (. // "") | sub("\\.[0-9]+"; "") | sub("(\\+00:00|Z)$"; "Z"
   | (try fromdateiso8601 catch 0);'
 
 record_history() { # $1 = response JSON, $2 = epoch of the reading, $3 = source
+  [ "$ACCOUNT_UNKNOWN" = "1" ] && return 0
   local line last
   line=$(printf '%s' "$1" | "$JQ" -c --argjson t "$2" --arg s "$3" "$JQ_EPOCH"'
     { t: $t, s: $s,
@@ -224,6 +315,18 @@ log_note() {
   echo "$(date '+%F %T') [$MODE${OWN_VERSION:+ v$OWN_VERSION}] $1" >> "$LOG"
 }
 log_fetch_fail() { log_note "fetch failed: $1"; } # silent fetch failures used to leave no trace at all
+
+[ "${PROFILE_FAILED:-0}" = "1" ] && log_note "account of the Keychain token unknown (/api/oauth/profile failed) — using ~/.claude.json"
+[ "${TOKEN_SOURCES_DIFFER:-0}" = "1" ] && \
+  log_note "Keychain token belongs to ${ACCOUNT_KEY}, ~/.claude.json names another account — keyed by the token"
+# Whose numbers these would be is not known: the checks write nothing (no
+# cache, state, history or pause), so another account's files stay intact.
+if [ "$ACCOUNT_UNKNOWN" = "1" ]; then
+  case "$MODE" in hook|cron)
+    log_note "unreadable ~/.claude.json and the token's account unknown — check skipped"
+    exit 0 ;;
+  esac
+fi
 
 # Backoff after HTTP 401, 403 or 429. Without it every hook (past the 60 s cache) and every
 # cron tick asks again, which keeps the rate limit alive. The pause follows
@@ -398,9 +501,7 @@ fetch_usage() {
       return 0
     fi
   fi
-  local token
-  token=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null \
-    | "$JQ" -r '.claudeAiOauth.accessToken // empty')
+  local token="$TOKEN"
   local resp http_code headers retry_after delay try_cli=0 fetch_started
   fetch_started=$(date +%s)
   if backoff_active; then
@@ -480,8 +581,9 @@ fetch_usage() {
   local util fetched_ms age
   # Claude Code stamps this with the accountUuid it was fetched for and drops
   # it when that is not the signed-in account; an entry without the stamp, or
-  # with another account's, is not ours either.
-  util=$("$JQ" -c '(.oauthAccount.accountUuid // null) as $me
+  # with another account's, is not ours either. "Ours" is the account this run
+  # is keyed by — the token's, which ~/.claude.json may not have caught up with.
+  util=$("$JQ" -c --arg me "${ACCOUNT%%:*}" '(if $me == "" then (.oauthAccount.accountUuid // null) else $me end) as $me
     | .cachedUsageUtilization // empty
     | select($me == null or .accountUuid == $me)' "$claude_json" 2>/dev/null)
   if [ -z "$util" ] || [ "$util" = "null" ]; then
@@ -759,8 +861,18 @@ if [ "$MODE" = "doctor" ]; then
   else
     ok "Keychain token: present, plan ${tok_plan}" "Токен в Keychain: есть, план ${tok_plan}"
   fi
-  if [ -n "$ACCOUNT_KEY" ]; then
+  oauth_key=$(printf '%s' "$OAUTH_ACCOUNT" | awk -F: 'NF { print substr($1, 1, 8) "-" substr($2, 1, 8) }')
+  if [ "$ACCOUNT_UNKNOWN" = "1" ]; then
+    bad "Account: unknown — ~/.claude.json does not parse and the token's account is not known yet; checks are skipped until it does." \
+        "Аккаунт: не определён — ~/.claude.json не читается, а аккаунт токена ещё не известен; проверки пропускаются, пока файл не прочитается."
+  elif [ -n "$TOKEN_ACCOUNT" ] && [ -n "$OAUTH_ACCOUNT" ] && [ "$TOKEN_ACCOUNT" != "$OAUTH_ACCOUNT" ]; then
+    bad "Account: $ACCOUNT_KEY by the Keychain token, but ~/.claude.json names $oauth_key — normal for a moment after switching accounts; if it lasts, sign in again (/login)." \
+        "Аккаунт: $ACCOUNT_KEY по токену в Keychain, а в ~/.claude.json — $oauth_key. Сразу после смены аккаунта это нормально; если не проходит — войдите заново (/login)."
+  elif [ -n "$TOKEN_ACCOUNT" ]; then
     ok "Account: $ACCOUNT_KEY" "Аккаунт: $ACCOUNT_KEY"
+  elif [ -n "$ACCOUNT_KEY" ]; then
+    ok "Account: $ACCOUNT_KEY (from ~/.claude.json; the token's own account is looked up on the next check)" \
+       "Аккаунт: $ACCOUNT_KEY (по ~/.claude.json; аккаунт самого токена уточнится при следующей проверке)"
   else
     info "Account: unknown (no oauthAccount in ~/.claude.json) — state is shared by every sign-in." \
          "Аккаунт: не определён (в ~/.claude.json нет oauthAccount) — состояние общее для всех входов."

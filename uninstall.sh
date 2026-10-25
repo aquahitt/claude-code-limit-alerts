@@ -64,6 +64,7 @@ rm -f "$SCRIPTS_DIR/usage-monitor.sh" \
       "$SCRIPTS_DIR/usage-monitor-state.json" \
       "$SCRIPTS_DIR/usage-monitor-cache.json" \
       "$SCRIPTS_DIR/usage-monitor-backoff.json" \
+      "$SCRIPTS_DIR/usage-monitor-accounts.json" \
       "$SCRIPTS_DIR/usage-monitor-cli-refresh" \
       "$SCRIPTS_DIR/usage-monitor-sl-refresh" \
       "$SCRIPTS_DIR/usage-monitor-observed" \
@@ -76,7 +77,8 @@ rm -f "$SCRIPTS_DIR"/auto-resume-*.lock
 # and the state file of <= 0.9.0 if it was retired by hand.
 rm -f "$SCRIPTS_DIR"/usage-monitor-state.*.json "$SCRIPTS_DIR"/usage-monitor-backoff.*.json
 # The temporary file a state write goes through (0.11.2+), left by a killed run.
-rm -f "$SCRIPTS_DIR"/usage-monitor-state*.json.*.tmp "$SCRIPTS_DIR"/usage-monitor-backoff*.json.*.tmp
+rm -f "$SCRIPTS_DIR"/usage-monitor-state*.json.*.tmp "$SCRIPTS_DIR"/usage-monitor-backoff*.json.*.tmp \
+      "$SCRIPTS_DIR"/usage-monitor-accounts.json.*.tmp
 # History of readings (the forecast's ground): one file per account, and an
 # untagged one when there was no OAuth sign-in.
 rm -f "$SCRIPTS_DIR"/usage-history.jsonl "$SCRIPTS_DIR"/usage-history.*.jsonl \
