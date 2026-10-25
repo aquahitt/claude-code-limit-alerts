@@ -79,6 +79,8 @@ rm -f "$SCRIPTS_DIR"/usage-monitor-state.*.json "$SCRIPTS_DIR"/usage-monitor-bac
 # The temporary file a state write goes through (0.11.2+), left by a killed run.
 rm -f "$SCRIPTS_DIR"/usage-monitor-state*.json.*.tmp "$SCRIPTS_DIR"/usage-monitor-backoff*.json.*.tmp \
       "$SCRIPTS_DIR"/usage-monitor-accounts.json.*.tmp
+# Response headers of a live request, left behind by a run that was killed.
+rm -f "$SCRIPTS_DIR"/.usage-headers.*
 # History of readings (the forecast's ground): one file per account, and an
 # untagged one when there was no OAuth sign-in.
 rm -f "$SCRIPTS_DIR"/usage-history.jsonl "$SCRIPTS_DIR"/usage-history.*.jsonl \
