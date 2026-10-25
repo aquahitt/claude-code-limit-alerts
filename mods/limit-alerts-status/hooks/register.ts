@@ -15,6 +15,29 @@ async function mtime($: EngineInterface, path: string): Promise<number | undefin
   }
 }
 
+// Claude Code's configuration directory and global config, as Claude Code
+// itself finds them: CLAUDE_CONFIG_DIR as given, else ~/.claude; the global
+// config sits inside CLAUDE_CONFIG_DIR, else in the home directory, and a
+// non-empty legacy .config.json in the configuration directory wins.
+async function claudePaths($: EngineInterface): Promise<{ dir: string; json: string } | undefined> {
+  const home = await $.env.get('HOME')
+  const custom = await $.env.get('CLAUDE_CONFIG_DIR')
+  if (!custom && !home) {
+    return undefined
+  }
+  const dir = custom || `${home}/.claude`
+  const legacy = `${dir}/.config.json`
+  try {
+    const stat = await $.fs.stat(legacy)
+    if (stat.kind === 'file' && stat.size > 0) {
+      return { dir, json: legacy }
+    }
+  } catch {
+    // no legacy file
+  }
+  return { dir, json: `${custom || home}/.claude.json` }
+}
+
 // The monitor's state directory, by the same chain as the bash scripts:
 // explicit option, UM_STATE_DIR, the classic install's ~/.claude/scripts.
 // CLAUDE_PLUGIN_DATA is deliberately absent (see CLAUDE.md); the plugin
@@ -40,7 +63,7 @@ async function locate($: EngineInterface, options: PluginOptions): Promise<strin
     return classic
   }
 
-  const dataRoot = `${home}/.claude/plugins/data`
+  const dataRoot = `${(await claudePaths($))?.dir ?? `${home}/.claude`}/plugins/data`
   let entries
   try {
     entries = await $.fs.list(dataRoot)
@@ -68,18 +91,18 @@ async function readJson<T>($: EngineInterface, path: string): Promise<T | undefi
   }
 }
 
-// The signed-in account as usage-monitor.sh keys it, from ~/.claude.json:
+// The signed-in account as usage-monitor.sh keys it, from .claude.json:
 // `id` (account:organization) tags the cache, `key` (their first 8 chars)
 // names the per-account pause file. Null when there is no sign-in (no file,
 // no oauthAccount): then only an untagged cache and the untagged pause file
 // are this install's. Undefined when the file is there but does not parse —
 // Claude Code rewrites it constantly — and then no cache is anyone's.
 async function currentAccount($: EngineInterface): Promise<{ id: string; key: string } | null | undefined> {
-  const home = await $.env.get('HOME')
-  if (!home) {
+  const paths = await claudePaths($)
+  if (!paths) {
     return null
   }
-  const path = `${home}/.claude.json`
+  const path = paths.json
   if (await mtime($, path) === undefined) {
     return null
   }

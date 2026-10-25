@@ -65,7 +65,7 @@ msg=$(jq -r '.message // empty' <<<"$input" 2>/dev/null)
 # Session name (as shown in the tab title) — from live session metadata
 sname=""
 if [[ -n "$sid_full" ]]; then
-  sfile=$(grep -l "$sid_full" "$HOME/.claude/sessions/"*.json 2>/dev/null | head -1)
+  sfile=$(grep -l "$sid_full" "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/sessions/"*.json 2>/dev/null | head -1)
   [[ -n "$sfile" ]] && sname=$(jq -r '.name // empty' "$sfile" 2>/dev/null)
 fi
 

@@ -71,7 +71,12 @@ SL_RESET="${UM_STATUSLINE_RESET:-1}"
 SL_PACE="${UM_STATUSLINE_PACE:-1}"
 SL_BG_REFRESH="${UM_STATUSLINE_BG_REFRESH:-1}"
 SL_REFRESH_AFTER="${UM_STATUSLINE_REFRESH_AFTER:-120}"
-SETTINGS="$HOME/.claude/settings.json"
+# Claude Code's configuration directory and global config, CLAUDE_CONFIG_DIR
+# honoured the way Claude Code does it (see usage-monitor.sh).
+CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+CLAUDE_JSON="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
+[ -s "$CLAUDE_DIR/.config.json" ] && CLAUDE_JSON="$CLAUDE_DIR/.config.json"
+SETTINGS="$CLAUDE_DIR/settings.json"
 
 # Real ESC bytes, not the literal text "\033[...]". The final render uses
 # printf '%s', never '%b': everything on this line is attacker-adjacent data —
@@ -342,14 +347,14 @@ pick_window() { # $1 pct A, $2 reset A, $3 pct B, $4 reset B ("" = absent) -> "p
 # The signed-in account (account + organization, see usage-monitor.sh): the
 # cache and the shared observations are used only when they belong to it, so
 # switching accounts never shows the previous account's numbers. An untagged
-# cache is only an install's with no sign-in at all. ~/.claude.json caught
+# cache is only an install's with no sign-in at all. .claude.json caught
 # mid-rewrite does not parse: then the account is unknown for this redraw,
 # and neither the cache nor the shared observations are used or written.
 ACCOUNT=""
 ACCOUNT_UNKNOWN=0
-if [ -x "$JQ" ] && [ -f "$HOME/.claude.json" ]; then
+if [ -x "$JQ" ] && [ -f "$CLAUDE_JSON" ]; then
   ACCOUNT=$("$JQ" -r '.oauthAccount // {} | select(.accountUuid != null)
-    | "\(.accountUuid):\(.organizationUuid // "")"' "$HOME/.claude.json" 2>/dev/null) \
+    | "\(.accountUuid):\(.organizationUuid // "")"' "$CLAUDE_JSON" 2>/dev/null) \
     || { ACCOUNT=""; ACCOUNT_UNKNOWN=1; }
 fi
 CACHE_MINE=0
@@ -466,7 +471,7 @@ if [ "$SL_BG_REFRESH" = "1" ]; then
   monitor="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)/usage-monitor.sh"
   # During the monitor's 401/403/429 pause a refresh makes no request, and the
   # only thing it can still pick up is Claude Code's own cachedUsageUtilization
-  # in ~/.claude.json — the standing data source of accounts the endpoint
+  # in .claude.json — the standing data source of accounts the endpoint
   # keeps refusing. With nothing newer there than the cache, it would only log
   # "fallback unavailable" every 30 seconds, so it is not started. The pause
   # file is per account (usage-monitor.sh BACKOFF).
@@ -478,7 +483,7 @@ if [ "$SL_BG_REFRESH" = "1" ]; then
     [ "${until:-0}" -gt "$NOW_S" ] 2>/dev/null || return 0
     fetched=$("$JQ" -r '(.oauthAccount.accountUuid // null) as $me
       | .cachedUsageUtilization // {} | select($me == null or .accountUuid == $me)
-      | (.fetchedAtMs // 0) / 1000 | floor' "$HOME/.claude.json" 2>/dev/null || echo 0)
+      | (.fetchedAtMs // 0) / 1000 | floor' "$CLAUDE_JSON" 2>/dev/null || echo 0)
     [ "${fetched:-0}" -gt "$cache_mtime" ] 2>/dev/null && [ $(( NOW_S - fetched )) -lt 3600 ]
   }
   if [ $(( NOW_S - cache_mtime )) -ge "$SL_REFRESH_AFTER" ] \

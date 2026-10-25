@@ -47,7 +47,16 @@ emit() {
 }
 trap emit EXIT
 
-SETTINGS="$HOME/.claude/settings.json"
+# The settings of the configuration directory this session runs in: a session
+# started with CLAUDE_CONFIG_DIR reads its statusline and pluginConfigs from
+# there, not from ~/.claude.
+SETTINGS="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/settings.json"
+# Whether that is the default directory. Only its plugin manages the
+# background agent (see apply_launchd).
+DEFAULT_CONFIG=1
+if [ -n "${CLAUDE_CONFIG_DIR:-}" ] && [ "${CLAUDE_CONFIG_DIR%/}" != "$HOME/.claude" ]; then
+  DEFAULT_CONFIG=0
+fi
 
 # Resolve one userConfig option. The environment wins — that is how a hook
 # receives it. Otherwise fall back to pluginConfigs in the user's settings.json,
@@ -339,6 +348,19 @@ apply_launchd() {
   local want sandboxed="${UM_NO_LAUNCHCTL:-0}"
   want="$(plugin_option LAUNCHD launchd)"
   [ -n "$want" ] || return 0
+
+  # The agent is one per macOS user, like Claude Code's own daemon, which
+  # refuses to install under CLAUDE_CONFIG_DIR. A plugin in another config
+  # directory has its own data directory, so letting it write the plist made
+  # the two installs take the agent from each other on every session start.
+  # It leaves the agent to the default directory's plugin and only removes a
+  # plist that points at its own data.
+  if [ "$DEFAULT_CONFIG" = "0" ] && ! grep -qF "$BIN/" "$PLUGIN_PLIST" 2>/dev/null; then
+    [ "$want" = "true" ] && note_once noted_profile_launchd \
+      "limit-alerts: the background agent runs only for the default Claude Code configuration (~/.claude). Under CLAUDE_CONFIG_DIR limits are checked on turns and by the statusline." \
+      "limit-alerts: фоновый агент работает только для конфигурации Claude Code по умолчанию (~/.claude). С CLAUDE_CONFIG_DIR лимиты проверяются на ходах и статусной строкой."
+    return 0
+  fi
 
   if [ "$want" != "true" ]; then
     [ -f "$PLUGIN_PLIST" ] || return 0

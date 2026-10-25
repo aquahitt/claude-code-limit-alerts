@@ -141,7 +141,25 @@ fi
 # retried, and if the file stays unreadable the account counts as unknown
 # (ACCOUNT_UNKNOWN=1): nothing is written for it — see below. A file that
 # parses but has no oauthAccount is a real "no sign-in".
-CLAUDE_JSON="$HOME/.claude.json"
+#
+# Paths follow Claude Code's own: a session started with CLAUDE_CONFIG_DIR
+# keeps its config, settings and Keychain entry apart from the default ones
+# (the variable as given, not resolved — "X" and "X/" are two Keychain
+# entries to Claude Code too). A non-empty legacy .config.json in that
+# directory still wins over .claude.json, as it does for Claude Code.
+CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+CLAUDE_JSON="${CLAUDE_CONFIG_DIR:-$HOME}/.claude.json"
+[ -s "$CLAUDE_DIR/.config.json" ] && CLAUDE_JSON="$CLAUDE_DIR/.config.json"
+case "$CLAUDE_JSON" in
+  "$HOME"/*) CLAUDE_JSON_SHOWN="~${CLAUDE_JSON#"$HOME"}" ;;
+  *)         CLAUDE_JSON_SHOWN="$CLAUDE_JSON" ;;
+esac
+KEYCHAIN_SERVICE="Claude Code-credentials"
+if [ -n "${CLAUDE_SECURESTORAGE_CONFIG_DIR+set}" ]; then
+  [ -n "$CLAUDE_SECURESTORAGE_CONFIG_DIR" ] && KEYCHAIN_SERVICE="$KEYCHAIN_SERVICE-$(printf '%s' "$CLAUDE_SECURESTORAGE_CONFIG_DIR" | shasum -a 256 | cut -c1-8)"
+elif [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then
+  KEYCHAIN_SERVICE="$KEYCHAIN_SERVICE-$(printf '%s' "$CLAUDE_CONFIG_DIR" | shasum -a 256 | cut -c1-8)"
+fi
 ACCOUNT=""
 ACCOUNT_UNKNOWN=0
 if [ -f "$CLAUDE_JSON" ]; then
@@ -174,7 +192,7 @@ OAUTH_ACCOUNT="$ACCOUNT"
 ACCOUNTS_MAP="$DIR/usage-monitor-accounts.json"
 ACCOUNTS_KEEP=10
 PROFILE_RETRY=600
-TOKEN=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null \
+TOKEN=$(security find-generic-password -s "$KEYCHAIN_SERVICE" -w 2>/dev/null \
   | "$JQ" -r '.claudeAiOauth.accessToken // empty' 2>/dev/null)
 TOKEN_ID=""
 [ -n "$TOKEN" ] && TOKEN_ID=$(printf '%s' "$TOKEN" | shasum -a 256 2>/dev/null | cut -c1-16)
@@ -324,14 +342,14 @@ log_note() {
 }
 log_fetch_fail() { log_note "fetch failed: $1"; } # silent fetch failures used to leave no trace at all
 
-[ "${PROFILE_FAILED:-0}" = "1" ] && log_note "account of the Keychain token unknown (/api/oauth/profile failed) — using ~/.claude.json"
+[ "${PROFILE_FAILED:-0}" = "1" ] && log_note "account of the Keychain token unknown (/api/oauth/profile failed) — using $CLAUDE_JSON_SHOWN"
 [ "${TOKEN_SOURCES_DIFFER:-0}" = "1" ] && \
-  log_note "Keychain token belongs to ${ACCOUNT_KEY}, ~/.claude.json names another account — keyed by the token"
+  log_note "Keychain token belongs to ${ACCOUNT_KEY}, $CLAUDE_JSON_SHOWN names another account — keyed by the token"
 # Whose numbers these would be is not known: the checks write nothing (no
 # cache, state, history or pause), so another account's files stay intact.
 if [ "$ACCOUNT_UNKNOWN" = "1" ]; then
   case "$MODE" in hook|cron)
-    log_note "unreadable ~/.claude.json and the token's account unknown — check skipped"
+    log_note "unreadable $CLAUDE_JSON_SHOWN and the token's account unknown — check skipped"
     exit 0 ;;
   esac
 fi
@@ -459,7 +477,7 @@ refresh_via_cli() {
   fi
   touch "$CLI_REFRESH_STAMP" 2>/dev/null || true
   claude_bin=$(resolve_claude_bin) || { log_note "'claude -p /usage' refresh unavailable: claude binary not found"; return 1; }
-  local claude_json="$HOME/.claude.json"
+  local claude_json="$CLAUDE_JSON"
   local before after
   before=$("$JQ" -r '.cachedUsageUtilization.fetchedAtMs // 0' "$claude_json" 2>/dev/null || echo 0)
   if ! ( cd "$HOME" && UM_INTERNAL=1 run_with_timeout 15 "$claude_bin" -p "/usage" --output-format json ) >/dev/null 2>&1; then
@@ -469,7 +487,7 @@ refresh_via_cli() {
   after=$("$JQ" -r '.cachedUsageUtilization.fetchedAtMs // 0' "$claude_json" 2>/dev/null || echo 0)
   if [ "$after" = "$before" ]; then
     if [ "$after" = "0" ]; then
-      log_note "'claude -p /usage' ran but ~/.claude.json still has no cachedUsageUtilization"
+      log_note "'claude -p /usage' ran but $CLAUDE_JSON_SHOWN still has no cachedUsageUtilization"
     else
       local age=$(( $(date +%s) - after / 1000 ))
       log_note "'claude -p /usage' ran but did not refresh cachedUsageUtilization (still ${age}s old)"
@@ -597,9 +615,9 @@ fetch_usage() {
   # cached locally. Same response shape (.limits[]), but only as fresh as
   # the last time /usage ran (just above, or previously) — treat data older
   # than 1h as stale and skip rather than alert on outdated numbers.
-  local claude_json="$HOME/.claude.json"
+  local claude_json="$CLAUDE_JSON"
   if [ ! -f "$claude_json" ]; then
-    log_fetch_fail "fallback unavailable: ~/.claude.json not found"
+    log_fetch_fail "fallback unavailable: $CLAUDE_JSON_SHOWN not found"
     return 1
   fi
   local util fetched_ms age
@@ -611,7 +629,7 @@ fetch_usage() {
     | .cachedUsageUtilization // empty
     | select($me == null or .accountUuid == $me)' "$claude_json" 2>/dev/null)
   if [ -z "$util" ] || [ "$util" = "null" ]; then
-    log_fetch_fail "fallback unavailable: no cachedUsageUtilization for this account in ~/.claude.json"
+    log_fetch_fail "fallback unavailable: no cachedUsageUtilization for this account in $CLAUDE_JSON_SHOWN"
     return 1
   fi
   fetched_ms=$(echo "$util" | "$JQ" -r '.fetchedAtMs // 0')
@@ -859,20 +877,24 @@ if [ "$MODE" = "doctor" ]; then
     else                           tr_ "$(( $1 / 86400 )) d" "$(( $1 / 86400 )) д"; fi
   }
   NOW=$(date +%s)
-  SETTINGS="$HOME/.claude/settings.json"
+  # install.sh always writes ~/.claude/settings.json; the plugin lives in the
+  # settings of the config directory it was installed into.
   case "$DIR" in
-    */plugins/data/*) INSTALL=plugin; LABEL="com.claude.usage-monitor.plugin" ;;
-    *)                INSTALL=classic; LABEL="com.claude.usage-monitor" ;;
+    */plugins/data/*) INSTALL=plugin; LABEL="com.claude.usage-monitor.plugin"; SETTINGS="$CLAUDE_DIR/settings.json" ;;
+    *)                INSTALL=classic; LABEL="com.claude.usage-monitor"; SETTINGS="$HOME/.claude/settings.json" ;;
   esac
   if [ "$INSTALL" = "plugin" ]; then
     info "Installation: plugin, state in $DIR" "Установка: плагин, состояние в $DIR"
   else
     info "Installation: install.sh, state in $DIR" "Установка: install.sh, состояние в $DIR"
   fi
+  [ -n "${CLAUDE_CONFIG_DIR:-}" ] && \
+    info "Claude Code configuration: $CLAUDE_DIR (CLAUDE_CONFIG_DIR), Keychain entry \"$KEYCHAIN_SERVICE\"" \
+         "Конфигурация Claude Code: $CLAUDE_DIR (CLAUDE_CONFIG_DIR), запись Keychain «$KEYCHAIN_SERVICE»"
   ok "jq: $JQ" "jq: $JQ"
 
   # Token: presence, plan and expiry only — never the token itself.
-  creds=$(security find-generic-password -s "Claude Code-credentials" -w 2>/dev/null)
+  creds=$(security find-generic-password -s "$KEYCHAIN_SERVICE" -w 2>/dev/null)
   IFS='|' read -r tok_has tok_exp tok_plan <<< "$(printf '%s' "$creds" | "$JQ" -r '
     .claudeAiOauth // {} | [ ((.accessToken // "") != ""), ((.expiresAt // 0) / 1000 | floor),
       (.subscriptionType // "?") ] | map(tostring) | join("|")' 2>/dev/null)"
@@ -887,19 +909,19 @@ if [ "$MODE" = "doctor" ]; then
   fi
   oauth_key=$(printf '%s' "$OAUTH_ACCOUNT" | awk -F: 'NF { print substr($1, 1, 8) "-" substr($2, 1, 8) }')
   if [ "$ACCOUNT_UNKNOWN" = "1" ]; then
-    bad "Account: unknown — ~/.claude.json does not parse and the token's account is not known yet; checks are skipped until it does." \
-        "Аккаунт: не определён — ~/.claude.json не читается, а аккаунт токена ещё не известен; проверки пропускаются, пока файл не прочитается."
+    bad "Account: unknown — $CLAUDE_JSON_SHOWN does not parse and the token's account is not known yet; checks are skipped until it does." \
+        "Аккаунт: не определён — $CLAUDE_JSON_SHOWN не читается, а аккаунт токена ещё не известен; проверки пропускаются, пока файл не прочитается."
   elif [ -n "$TOKEN_ACCOUNT" ] && [ -n "$OAUTH_ACCOUNT" ] && [ "$TOKEN_ACCOUNT" != "$OAUTH_ACCOUNT" ]; then
-    bad "Account: $ACCOUNT_KEY by the Keychain token, but ~/.claude.json names $oauth_key — normal for a moment after switching accounts; if it lasts, sign in again (/login)." \
-        "Аккаунт: $ACCOUNT_KEY по токену в Keychain, а в ~/.claude.json — $oauth_key. Сразу после смены аккаунта это нормально; если не проходит — войдите заново (/login)."
+    bad "Account: $ACCOUNT_KEY by the Keychain token, but $CLAUDE_JSON_SHOWN names $oauth_key — normal for a moment after switching accounts; if it lasts, sign in again (/login)." \
+        "Аккаунт: $ACCOUNT_KEY по токену в Keychain, а в $CLAUDE_JSON_SHOWN — $oauth_key. Сразу после смены аккаунта это нормально; если не проходит — войдите заново (/login)."
   elif [ -n "$TOKEN_ACCOUNT" ]; then
     ok "Account: $ACCOUNT_KEY" "Аккаунт: $ACCOUNT_KEY"
   elif [ -n "$ACCOUNT_KEY" ]; then
-    ok "Account: $ACCOUNT_KEY (from ~/.claude.json; the token's own account is looked up on the next check)" \
-       "Аккаунт: $ACCOUNT_KEY (по ~/.claude.json; аккаунт самого токена уточнится при следующей проверке)"
+    ok "Account: $ACCOUNT_KEY (from $CLAUDE_JSON_SHOWN; the token's own account is looked up on the next check)" \
+       "Аккаунт: $ACCOUNT_KEY (по $CLAUDE_JSON_SHOWN; аккаунт самого токена уточнится при следующей проверке)"
   else
-    info "Account: unknown (no oauthAccount in ~/.claude.json) — state is shared by every sign-in." \
-         "Аккаунт: не определён (в ~/.claude.json нет oauthAccount) — состояние общее для всех входов."
+    info "Account: unknown (no oauthAccount in $CLAUDE_JSON_SHOWN) — state is shared by every sign-in." \
+         "Аккаунт: не определён (в $CLAUDE_JSON_SHOWN нет oauthAccount) — состояние общее для всех входов."
   fi
 
   cache_mtime=$(stat -f %m "$CACHE" 2>/dev/null || echo 0)
@@ -955,7 +977,13 @@ if [ "$MODE" = "doctor" ]; then
   fi
 
   PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-  if [ -f "$PLIST" ]; then
+  # One agent per macOS user: the plugin of the default config directory owns
+  # it (see plugin-bootstrap.sh), so a session under CLAUDE_CONFIG_DIR may see
+  # an agent that checks another directory's account.
+  if [ -f "$PLIST" ] && [ "$INSTALL" = "plugin" ] && ! grep -qF "$DIR/bin/" "$PLIST" 2>/dev/null; then
+    info "Background agent: runs for the default Claude Code configuration, not this one ($CLAUDE_DIR) — here limits are checked on turns and by the statusline." \
+         "Фоновый агент: работает для конфигурации Claude Code по умолчанию, не для этой ($CLAUDE_DIR) — здесь лимиты проверяются на ходах и statusline."
+  elif [ -f "$PLIST" ]; then
     interval=$(plutil -extract StartInterval raw "$PLIST" 2>/dev/null || echo "?")
     if [ "${UM_NO_LAUNCHCTL:-0}" = "1" ] || launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1; then
       ok "Background agent: on, every ${interval} s" "Фоновый агент: включён, каждые ${interval} с"
@@ -1054,8 +1082,8 @@ if ! USAGE=$(fetch_usage); then
     # account's (or untagged, from before the account was known), or no way to
     # tell whose a cache is.
     if [ "$ACCOUNT_UNKNOWN" = "1" ]; then
-      why_en="the account is unknown (~/.claude.json does not parse), so no cache can be trusted"
-      why_ru="аккаунт не определён (~/.claude.json не читается), поэтому кэшу нельзя доверять"
+      why_en="the account is unknown ($CLAUDE_JSON_SHOWN does not parse), so no cache can be trusted"
+      why_ru="аккаунт не определён ($CLAUDE_JSON_SHOWN не читается), поэтому кэшу нельзя доверять"
     elif [ -f "$CACHE" ] && ! cache_is_mine; then
       why_en="the cache belongs to another account; the next successful check replaces it"
       why_ru="кэш принадлежит другому аккаунту; следующая удачная проверка заменит его"
